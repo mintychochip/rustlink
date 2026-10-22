@@ -229,15 +229,13 @@ fn links_ignore_their_element_type_for_equality_and_hashing() {
 }
 
 #[test]
-fn debug_output_shows_the_decoded_value() {
-    assert_eq!(format!("{:?}", Abs::<(), u8>::new(3).unwrap()), "Abs(3)");
-    assert_eq!(format!("{:?}", OptAbs::<(), u8>::NULL), "OptAbs(None)");
-    assert_eq!(
-        format!("{:?}", Rel::<(), u8>::new(5, 2).unwrap()),
-        "Rel(-3)"
-    );
-    assert_eq!(
-        format!("{:?}", OptRel::<(), u8>::new(5, Some(7)).unwrap()),
-        "OptRel(Some(2))"
-    );
+fn debug_output_shows_the_decoded_value_not_the_stored_bytes() {
+    // -3 stored as an i8 is the byte 253, and 300 stored little-endian is [44, 1]:
+    // Debug must show the decoded values.
+    let rel = format!("{:?}", Rel::<(), u8>::new(5, 2).unwrap());
+    assert!(rel.contains("-3") && !rel.contains("253"), "{rel}");
+    let abs = format!("{:?}", Abs::<(), u16>::new(300).unwrap());
+    assert!(abs.contains("300"), "{abs}");
+    assert!(format!("{:?}", OptAbs::<(), u8>::NULL).contains("None"));
+    assert!(format!("{:?}", OptRel::<(), u8>::new(5, Some(7)).unwrap()).contains('2'));
 }

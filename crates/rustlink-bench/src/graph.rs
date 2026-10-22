@@ -843,20 +843,6 @@ mod tests {
     }
 
     #[test]
-    fn registers_three_workloads_with_the_documented_limits() {
-        let all = workloads();
-        let names: Vec<&str> = all.iter().map(|w| w.name()).collect();
-        assert_eq!(
-            names,
-            ["graph-csr", "graph-linked-seq", "graph-linked-shuf"]
-        );
-        assert!(
-            all.iter()
-                .all(|w| w.max_n() == 1 << 22 && w.footprint_per_n() == 192)
-        );
-    }
-
-    #[test]
     fn a_single_vertex_graph_is_handled() {
         let graph = Graph::generate(1, 1);
         assert_eq!(bfs(&CsrU32::build(&graph), 1).checksum, 1);

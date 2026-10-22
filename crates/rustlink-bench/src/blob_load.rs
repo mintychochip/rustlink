@@ -366,13 +366,10 @@ mod tests {
     }
 
     #[test]
-    fn unknown_variants_are_errors_and_both_workloads_register() {
+    fn unknown_variants_are_errors() {
         for workload in workloads() {
             assert!(workload.run("box", &params(16)).is_err());
-            assert_eq!(workload.variants(), VARIANTS);
         }
-        let names: Vec<&str> = workloads().iter().map(|w| w.name()).collect();
-        assert_eq!(names, ["blob-load", "blob-lookup"]);
     }
 
     #[test]

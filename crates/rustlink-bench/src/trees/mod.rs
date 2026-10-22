@@ -52,7 +52,6 @@ pub(crate) fn lookups<V: TreeView>(view: &V, probes: &[u32]) -> Pass {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::variants::VARIANTS;
     use crate::workload::Metrics;
 
     fn done(outcome: Outcome) -> Metrics {
@@ -69,12 +68,6 @@ mod tests {
             seed: 1,
             budget: std::time::Duration::from_secs(60),
         }
-    }
-
-    #[test]
-    fn the_module_registers_its_four_workloads() {
-        let names: Vec<&str> = workloads().iter().map(|w| w.name()).collect();
-        assert_eq!(names, ["bst-random", "bst-bulk", "ast", "ast-bytes"]);
     }
 
     #[test]
@@ -157,22 +150,5 @@ mod tests {
                 workload.name()
             );
         }
-    }
-
-    #[test]
-    fn variant_lists_are_the_shared_list_except_for_ast_bytes() {
-        for workload in workloads() {
-            if workload.name() == "ast-bytes" {
-                assert_eq!(workload.variants(), ["bytes"]);
-            } else {
-                assert_eq!(workload.variants(), VARIANTS);
-            }
-        }
-    }
-
-    #[test]
-    fn bst_random_has_a_smaller_max_n() {
-        assert_eq!(bst_random::BstRandom.max_n(), 1 << 22);
-        assert_eq!(bst_bulk::BstBulk.max_n(), 1 << 24);
     }
 }

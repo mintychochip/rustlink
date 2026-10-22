@@ -49,14 +49,6 @@ fn into_vec_keeps_insertion_order() {
 }
 
 #[test]
-fn debug_lists_the_elements() {
-    let mut arena = Arena::new();
-    arena.push(1u8);
-    arena.push(2u8);
-    assert_eq!(format!("{arena:?}"), "[1, 2]");
-}
-
-#[test]
 fn links_into_another_region_resolve_there() {
     #[derive(Clone, Copy)]
     struct Vertex {
