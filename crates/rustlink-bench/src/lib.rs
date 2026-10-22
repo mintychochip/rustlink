@@ -8,6 +8,7 @@
 #![deny(unsafe_code)]
 
 pub mod alloc;
+pub mod blob_load;
 pub mod graph;
 pub mod measure;
 pub mod plan;
