@@ -10,7 +10,8 @@
 //!   are local.
 //!
 //! All link types are `Copy`, have alignment 1 and implement the `zerocopy` traits, so node
-//! types that contain them can derive the same traits.
+//! types that contain them can derive the same traits. An [`Arena`] of such nodes can be
+//! frozen into a position-independent blob and read back with [`BlobRef::verify`].
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -19,6 +20,7 @@
 extern crate alloc;
 
 mod arena;
+mod blob;
 mod error;
 mod link;
 mod links;
@@ -26,6 +28,7 @@ mod region;
 mod width;
 
 pub use arena::Arena;
+pub use blob::{BlobRef, HEADER_LEN};
 pub use error::{Dangling, LinkError, VerifyError};
 pub use link::{Abs, Link, OptAbs, OptRel, Rel, Target};
 pub use links::Links;
