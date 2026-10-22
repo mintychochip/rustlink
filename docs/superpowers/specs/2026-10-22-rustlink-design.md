@@ -14,7 +14,7 @@ Design spec, 2026-10-22. Status: draft for user review.
 | Bench | `rustlink-bench` crate: runner, sweep driver, workloads, report | v1 |
 | L4 | Byte-addressed regions: varint (LEB128) links, variable-size records | gated on benchmark results (section 10) |
 
-Toolchain: stable Rust features only (the machine default is nightly 1.99, but no nightly feature is used), edition 2024, `rust-version = "1.88"` (the minimum of the dev-dependencies `proptest` 1.12 and `trybuild` 1.0).
+Toolchain: stable Rust features only (the machine default is nightly 1.99, but no nightly feature is used), edition 2024, `rust-version = "1.88"` (the minimum of the dev-dependency `proptest` 1.12).
 
 ### Decisions already made with the user
 
@@ -56,10 +56,12 @@ rustlink/
   Cargo.toml                       # workspace, resolver "3", publish = false
   crates/rustlink/                 # the library (L1-L3)
     src/{lib,width,link,error,region,arena,blob,links}.rs
-    tests/                         # integration, property, tamper, trybuild
+    tests/                         # integration, property and tamper tests; support/ holds shared fixtures
   crates/rustlink-bench/           # benchmarks (publish = false)
     src/bin/{rlb,sweep}.rs
-    src/{variants,workloads,registry,stats,alloc,report}.rs
+    src/{alloc,blob_load,graph,measure,plan,proc,registry,report,rng,stats,workload}.rs
+    src/{trees,variants}/
+    tests/smoke.rs                 # end-to-end test of rlb and sweep
   bench/                           # generated results (results.jsonl, results.md)
   docs/superpowers/specs/          # this document
   README.md  CHANGELOG.md
@@ -68,7 +70,7 @@ rustlink/
 ### 3.3 Dependencies
 
 - `rustlink` (runtime): `zerocopy = { version = "0.8", features = ["derive"] }`. The crate is `#![no_std]` with `extern crate alloc`; errors implement `core::error::Error`.
-- `rustlink` (dev): `proptest = "1"`, `trybuild = "1"`.
+- `rustlink` (dev): `proptest = "1"`.
 - `rustlink-bench`: `rustlink` and `zerocopy` only. Random numbers use an in-crate xorshift64*, JSON is written by hand, and page faults are read from `/proc/self/stat`.
 
 ### 3.4 Safety stance
@@ -88,6 +90,7 @@ pub trait Width: sealed::Sealed + Copy + 'static {
     const MAX: u64;              // 2^(8*BYTES) - 1
     const SIGNED_MIN: i64;       // -2^(8*BYTES - 1)
     const SIGNED_MAX: i64;       //  2^(8*BYTES - 1) - 1
+    const ZERO: Self::Le;        // the all-zero storage value, so `OptAbs::NULL` can be a const
     /// Alignment-1 little-endian storage: `u8` or zerocopy's
     /// `byteorder::little_endian::{U16, U32, U64}`.
     type Le: Copy + Eq + core::hash::Hash + core::fmt::Debug
@@ -330,26 +333,27 @@ Variants whose links cannot represent a workload's links (`abs16` above 65,535 n
 |---|---|
 | `bst-random` | Insert N random `u32` keys into an unbalanced BST (nodes allocated in insertion order, poor locality), then N lookups (half hits). |
 | `bst-bulk` | Build a perfectly balanced BST from sorted keys, children allocated before parents, then N random lookups. |
-| `ast` | Build a random expression tree of N nodes bottom-up (leaf constant, unary, binary), then evaluate it. Fixed-size node `{op: u8, a: link, b: link, val: i32}`. |
-| `graph-csr` | Random sparse graph, N vertices, average degree 8, CSR arrays; BFS from vertex 0. Variants `usize`, `u32`, `abs32` (control: typed ids must match plain `u32`). |
-| `graph-linked-seq` | Same graph as per-vertex linked edge lists, edges allocated consecutively per source vertex (best-case locality); BFS. |
-| `graph-linked-shuf` | Same, edges inserted in shuffled order (worst-case locality); BFS. |
-| `blob-load` | rustlink variants only: freeze a `bst-bulk` tree; time `verify`, traversal of the verified view, and rebuild from keys. |
+| `ast` | Build a random expression tree of at least N nodes bottom-up (leaf constant, unary negate, binary add or multiply), then evaluate it. Same node layout as the BST: `{payload: u32, a, b}`, with the operation in the high 8 bits of the payload and a 24-bit constant in the low bits. |
+| `graph-csr` | Random sparse graph, N vertices, out-degree 1 to 7 (average 4), CSR arrays; BFS from vertex 0. Variants `usize`, `u32`, `abs32` (control: typed ids must match plain `u32`). |
+| `graph-linked-seq` | Same graph as per-vertex linked edge lists, edges allocated consecutively per source vertex (best-case locality); BFS. Heads are `OptAbs<_, u32>` for every rustlink variant; only the `next` link varies. |
+| `graph-linked-shuf` | Same, edge slots a random permutation (worst-case locality); BFS. |
+| `blob-load` | rustlink variants only, on the `bst-bulk` tree. Build is rebuilding the arena from the plan; traverse is `BlobRef::verify` of the frozen image, in ns per node. |
+| `blob-lookup` | rustlink variants only: random lookups through the verified blob view, to compare with `bst-bulk` lookups through the arena. |
 | `ast-bytes` | Bench-only prototype for the L4 gate: the `ast` tree as variable-size records in a `Vec<u8>` (1-byte tag, LEB128 backward-offset links, inline integer constants), traversed by byte offset. Not part of the library. |
 
 Random numbers use a fixed-seed xorshift64*. All variants of a workload consume identical key and edge sequences.
 
 ### 7.3 Sizes, measurements, environment
 
-- Default sweep: N = 2^10, 2^12, 2^14, 2^16, 2^18, 2^20, 2^22, 2^24. `--big` adds 2^26 and runs only if `MemAvailable` allows. With 12-byte nodes the sweep spans 12 KiB at 2^10 nodes to 192 MiB at 2^24, from L1-resident to DRAM-resident on this machine (aggregate figures when this spec was written: 24 CPUs, L2 40 MiB across 12 instances, L3 36 MiB, 62 GiB RAM, swap fully used). The report header records per-level cache sizes read from `/sys/devices/system/cpu/cpu*/cache`. A cell is skipped with a note if its estimated footprint exceeds half of `MemAvailable`.
-- Per cell the runner reports: `size_of` node bytes; heap bytes requested per node (counting global allocator); build ns/node and traverse ns/node (median and median absolute deviation over at least 5 repetitions inside one fresh process, first repetition discarded as warm-up); peak RSS (`VmHWM` from `/proc/self/status`); minor and major page faults (`/proc/self/stat`).
+- Default sweep: N = 2^10, 2^12, 2^14, 2^16, 2^18, 2^20, 2^22, 2^24; `--big` adds 2^26. N is nodes for trees and vertices for graphs. Each workload declares a `max_n` (`bst-random` and the graph workloads 2^22, the others 2^24) and larger sizes are left out. With 12-byte nodes the sweep spans 12 KiB at 2^10 nodes to 192 MiB at 2^24, from L1-resident to DRAM-resident on this machine (aggregate figures when this spec was written: 24 CPUs, L2 40 MiB across 12 instances, L3 36 MiB, 62 GiB RAM, swap fully used). The report header records per-level cache sizes read from `/sys/devices/system/cpu/cpu*/cache`. A cell is skipped with a note if its estimated footprint (`n * footprint_per_n`) exceeds half of `MemAvailable`, or if the warm-up repetition predicts that the remaining repetitions exceed the time budget (`--budget-secs`, default 120).
+- Per cell the runner reports: `size_of` node bytes; heap bytes requested per node (a counting global allocator, enabled only during the warm-up repetition so timed repetitions pay nothing); build ns per node and traverse ns per unit of work (a lookup, node visit or edge scan, declared per workload), each as median and median absolute deviation over at least 5 measured repetitions inside one fresh process, the first repetition being a discarded warm-up; peak RSS (`VmHWM` from `/proc/self/status`); minor and major page faults (`/proc/self/stat`).
 - Isolation and noise control: one process per cell, so `VmHWM` is clean; the driver pins every process with `taskset -c <cpu>` to a CPU with the highest `cpuinfo_max_freq` (a P-core on a hybrid part; it falls back to CPU 0 with a warning if sysfs is unavailable); cells run in randomized interleaved order; `std::hint::black_box` guards all results. `perf` is not installed, so cache-miss counters are out of scope unless the user installs it.
 
 ### 7.4 Components
 
-- `rlb` (runner): `rlb run --workload W --variant V --n N --reps R --seed S` prints one JSON line with the fields above.
-- `sweep` (driver): expands the matrix, pins and spawns `rlb`, appends to `bench/results.jsonl`, and renders `bench/results.md` (one table per workload: rows are variants, columns are N, cells are traverse ns/node, bytes/node and peak RSS; machine info, kernel, `rustc` version and git revision in the header; the L4 gate table at the end).
-- Workloads and variants are registered through one `Workload` interface fixed before the benchmark work is split across agents. `registry.rs`, the list of registered workloads, is owned by the orchestrator and populated at integration; until then each agent exercises its own workloads through module tests, and `rlb` through a test-only workload.
+- `rlb` (runner): `rlb run --workload W --variant V --n N [--reps R] [--seed S] [--budget-secs B]` prints one JSON line (`measure::Measurement`); `rlb list` lists the registered workloads.
+- `sweep` (driver): expands the matrix, pins and spawns `rlb`, appends to `bench/results.jsonl`, and renders `bench/results.md` (one group of tables per workload: rows are variants, columns are N, cells are traverse and build times, heap bytes, peak RSS and node size; machine info, kernel, `rustc` version and git revision in the header; the L4 gate table at the end). `--report-only` re-renders from existing results; the last measurement of a cell wins.
+- Workloads implement the `Workload` trait. Each module (`trees`, `graph`, `blob_load`) exposes `workloads()`, and `registry::all()` concatenates them, so adding a workload never edits shared files.
 
 ## 8. Testing
 
@@ -357,29 +361,28 @@ Random numbers use a fixed-seed xorshift64*. All variants of a workload consume 
 - **Layout**: `size_of`/`align_of` for all link types and widths; a sample node (`i32` key as little-endian integer plus two links) derives the zerocopy traits and has sizes 12, 8 and 6 bytes for u32, u16 and u8 links.
 - **Arena and cursor**: append-only invariants; `follow`/`try_follow` on null, in-range, out-of-range and `Rel` underflow; cursor traversal of a hand-built tree matches the expected order.
 - **Differential**: random BST operation sequences on the `box` variant and on each reachable rustlink variant give identical lookup results.
-- **Blob**: freeze, verify, traverse matches arena traversal. Tamper test: on a small blob (64 nodes), set every byte offset to every one of the 255 other values; `verify` must return `Err`, or return a view whose links all resolve in range, with no panic. Truncation and trailing-byte cases return `Truncated` / `Length`.
-- **Type safety** (`trybuild`): applying an `Abs<A, _>` to an `Arena<B>` does not compile.
+- **Blob**: freeze, verify, traverse matches arena traversal. Tamper test: on a small blob (64 nodes), set every byte offset to every one of the 255 other values; `verify` must return `Err`, or return a view whose links all resolve in range, with no panic. Truncation and trailing-byte cases return `Truncated` / `Length`. The exhaustive tamper test is skipped under Miri; a sampled variant runs everywhere.
+- **Type safety**: a `compile_fail,E0277` rustdoc test on `Arena` shows that applying an `Abs<A, _>` to an `Arena<B>` does not compile. It checks the error code, not the message text, so it does not depend on compiler wording.
 - **Tooling**: `cargo test --workspace`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo fmt --check`; `cargo miri test -p rustlink` with `PROPTEST_CASES=16`; `cargo check -p rustlink --target wasm32-unknown-unknown` (confirms the `#![no_std]` crate builds for a non-host target; the crate has no feature flags).
 - **Benchmark smoke test**: `rlb run` at N = 2^10 for every workload and variant exits 0 and prints valid JSON.
 
 ## 9. Orchestration
 
-**Wave 0 (orchestrator, inline, sequential).** `git init`; workspace skeleton; full real implementation of L1 (`Width`, links, `Link`, `LinkError`), `Region`/`Cursor`/`Dangling`, `VerifyError`, and the benchmark `Workload` interface plus the results JSON schema, each with tests. These are the contracts the parallel agents build on; none is a stub. Includes the single compile test that zerocopy derives work on the generic link types (section 12, risk 1).
+**Wave 0 (orchestrator, inline, sequential).** `git init`; workspace skeleton; full real implementation, with tests, of: L1 (`Width`, the four links, `Link`, `LinkError`), `Region`/`Cursor`/`Dangling`, `Arena`, `Links`/`impl_links!`, the blob (`freeze`, `verify`, `VerifyError`), and the benchmark foundation (`rng`, `stats`, `alloc`, `workload`, `measure` with `run_reps` and the JSON `Measurement`, `registry`). These are the contracts the parallel tasks build on; none is a stub. The zerocopy derive compile test on the generic link types (section 12, risk 1) is the first thing Wave 0 does.
 
-**Wave 1 (four isolated agents, disjoint files, in parallel).**
+**Wave 1 (three isolated tasks, disjoint files, in parallel).**
 
-| Agent | Owns | Delivers |
+| Task | Owns | Delivers |
 |---|---|---|
-| `arena` | `arena.rs`, `tests/arena.rs` | `Arena<T>` and its tests, including the differential BST test |
-| `blob` | `blob.rs`, `links.rs`, `tests/blob.rs` | `freeze`, `verify`, `Links`, `impl_links!`, tamper and truncation tests |
-| `bench-trees` | `workloads/{bst,ast,ast_bytes}.rs`, `variants/` (tree node variants) | `bst-random`, `bst-bulk`, `ast`, `ast-bytes` across all variants |
-| `bench-harness` | `bin/{rlb,sweep}.rs`, `stats.rs`, `alloc.rs`, `report.rs`, `workloads/graph.rs` | runner, sweep driver, counting allocator, report renderer, graph workloads with their own variants defined in `graph.rs` |
+| `bench-trees` | `plan.rs`, `variants/`, `trees/` | `bst-random`, `bst-bulk`, `ast`, `ast-bytes` across all variants |
+| `bench-graph` | `graph.rs` | `graph-csr`, `graph-linked-seq`, `graph-linked-shuf` |
+| `bench-harness` | `proc.rs`, `report.rs`, `bin/{rlb,sweep}.rs` | runner, sweep driver, report renderer |
 
-**Wave 2 (orchestrator).** Integrate and populate `registry.rs`; add `blob-load` once `blob` lands; run the full workspace checks including Miri and the `no_std` build; run the sweep; review agents audit soundness and API; write `README.md` (usage, reach table, scenario guidance backed by the measured results) and `CHANGELOG.md`.
+**Wave 2 (orchestrator, sequential).** Add `blob_load.rs` (`blob-load`, `blob-lookup`), its registry entry and `tests/smoke.rs`; run the full workspace checks including Miri and the `no_std` build; run review agents on soundness and API **before** the sweep, because builds and reviews would disturb the measurements; run the sweep with the machine otherwise idle; write `README.md` (usage, reach table, scenario guidance backed by the measured results) and `CHANGELOG.md`.
 
 **Wave 3.** Present `bench/results.md` and the L4 gate table to the user for the go/no-go.
 
-Agents never edit files they do not own; any contract change goes through the orchestrator. Each agent runs in its own worktree, and the orchestrator integrates.
+Tasks never edit files they do not own; any contract change goes through the orchestrator. Each task runs in its own worktree, and the orchestrator integrates.
 
 ## 10. L4: gated byte-addressed layer
 
