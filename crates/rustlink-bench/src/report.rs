@@ -1,6 +1,6 @@
 //! Markdown rendering of benchmark results.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::fs;
 use std::process::Command;
@@ -134,15 +134,33 @@ pub fn render(measurements: &[Measurement], info: &MachineInfo) -> String {
         info.mem_available_kib as f64 / 1_048_576.0
     );
 
-    for workload in unique_in_order(measurements.iter().map(|m| m.workload.as_str())) {
-        let cells: Vec<&Measurement> = measurements
+    let latest = latest_per_cell(measurements);
+    for workload in unique_in_order(latest.iter().map(|m| m.workload.as_str())) {
+        let cells: Vec<&Measurement> = latest
             .iter()
+            .copied()
             .filter(|m| m.workload == workload)
             .collect();
         render_workload(&mut out, workload, &cells);
     }
-    render_gate(&mut out, measurements);
+    render_gate(&mut out, &latest);
     out
+}
+
+/// The last measurement of every (workload, variant, n) cell, in the order the cells first appear.
+fn latest_per_cell(measurements: &[Measurement]) -> Vec<&Measurement> {
+    let mut slot: HashMap<(&str, &str, u64), usize> = HashMap::new();
+    let mut latest: Vec<&Measurement> = Vec::new();
+    for m in measurements {
+        let key = (m.workload.as_str(), m.variant.as_str(), m.n);
+        let index = *slot.entry(key).or_insert(latest.len());
+        if index == latest.len() {
+            latest.push(m);
+        } else {
+            latest[index] = m;
+        }
+    }
+    latest
 }
 
 fn render_workload(out: &mut String, workload: &str, cells: &[&Measurement]) {
@@ -212,12 +230,8 @@ fn write_table(
     for variant in variants {
         let row: Vec<String> = sizes
             .iter()
-            .map(|&n| {
-                match cells
-                    .iter()
-                    .rev()
-                    .find(|m| m.variant == *variant && m.n == n)
-                {
+            .map(
+                |&n| match cells.iter().find(|m| m.variant == *variant && m.n == n) {
                     None => "-".to_owned(),
                     Some(m) => match m.status.as_str() {
                         "done" => value(m),
@@ -225,27 +239,22 @@ fn write_table(
                         "skipped" => "skip".to_owned(),
                         _ => "fail".to_owned(),
                     },
-                }
-            })
+                },
+            )
             .collect();
         let _ = writeln!(out, "| {variant} | {} |", row.join(" | "));
     }
     out.push('\n');
 }
 
-fn render_gate(out: &mut String, measurements: &[Measurement]) {
+fn render_gate(out: &mut String, measurements: &[&Measurement]) {
     let _ = writeln!(out, "## Layer-4 gate\n");
     let _ = writeln!(
         out,
         "Rule: proceed to layer 4 only if `ast-bytes` uses at least 1.5x less heap than the best \
-         layer-2 variant (`abs*` or `rel*`, lowest heap bytes per node) at no more than 1.1x its \
-         traversal time, at N >= 2^20.\n"
+         layer-2 variant (`abs*` or `rel*`: lowest heap bytes per node, the faster traversal among \
+         equals) at no more than 1.1x its traversal time, at N >= 2^20.\n"
     );
-    let last_done = |workload: &str, variant_ok: &dyn Fn(&str) -> bool, n: u64| {
-        measurements.iter().rev().find(|m| {
-            m.workload == workload && m.n == n && m.status == "done" && variant_ok(&m.variant)
-        })
-    };
     let sizes: BTreeSet<u64> = measurements
         .iter()
         .filter(|m| m.workload == "ast-bytes" && m.status == "done" && m.n >= 1 << 20)
@@ -254,11 +263,15 @@ fn render_gate(out: &mut String, measurements: &[Measurement]) {
 
     let mut rows = Vec::new();
     for n in sizes {
-        let Some(bytes) = last_done("ast-bytes", &|_| true, n) else {
+        let Some(bytes) = measurements
+            .iter()
+            .find(|m| m.workload == "ast-bytes" && m.n == n && m.status == "done")
+        else {
             continue;
         };
         let candidates: Vec<&Measurement> = measurements
             .iter()
+            .copied()
             .filter(|m| {
                 m.workload == "ast"
                     && m.n == n
@@ -266,10 +279,11 @@ fn render_gate(out: &mut String, measurements: &[Measurement]) {
                     && (m.variant.starts_with("abs") || m.variant.starts_with("rel"))
             })
             .collect();
-        let Some(best) = candidates
-            .iter()
-            .min_by(|a, b| a.heap_bytes_per_node.total_cmp(&b.heap_bytes_per_node))
-        else {
+        let Some(best) = candidates.iter().min_by(|a, b| {
+            a.heap_bytes_per_node
+                .total_cmp(&b.heap_bytes_per_node)
+                .then(a.traverse_ns_median.total_cmp(&b.traverse_ns_median))
+        }) else {
             continue;
         };
         let memory_ratio = if bytes.heap_bytes_per_node > 0.0 {
@@ -458,6 +472,46 @@ mod tests {
             render(&ms, &info())
         };
         assert!(below_threshold.contains("No data for the gate"));
+    }
+
+    #[test]
+    fn a_cell_that_ran_again_is_judged_by_its_last_measurement_in_the_gate() {
+        let mut ms = gate_inputs(8.0, 100.0, 4.0, 105.0);
+        let mut again = ms[1].clone(); // the best layer-2 variant, measured a second time
+        again.traverse_ns_median = 50.0;
+        ms.push(again);
+        let text = render(&ms, &info());
+        assert!(text.contains("| 2^20 | rel16 | 8.0 | 4.0 | 2.00 | 50.0 | 105.0 | 2.10 | fail |"));
+    }
+
+    #[test]
+    fn a_later_run_replaces_the_failure_it_repeats() {
+        let ms = [
+            cell("ast", "box", 1 << 20, "failed"),
+            cell("ast", "box", 1 << 20, "done"),
+        ];
+        assert!(!render(&ms, &info()).contains("### Notes"));
+    }
+
+    #[test]
+    fn equally_small_layer_two_variants_are_ranked_by_traversal_time_in_either_order() {
+        let timed = |variant: &str, ns: f64| {
+            let mut m = cell("ast", variant, 1 << 20, "done");
+            m.traverse_ns_median = ns;
+            m
+        };
+        let mut bytes = cell("ast-bytes", "bytes", 1 << 20, "done");
+        bytes.heap_bytes_per_node = 6.0;
+        bytes.traverse_ns_median = 100.0;
+        for ms in [
+            [timed("abs32", 100.0), timed("rel32", 90.0), bytes.clone()],
+            [timed("rel32", 90.0), timed("abs32", 100.0), bytes.clone()],
+        ] {
+            let text = render(&ms, &info());
+            assert!(
+                text.contains("| 2^20 | rel32 | 12.0 | 6.0 | 2.00 | 90.0 | 100.0 | 1.11 | fail |")
+            );
+        }
     }
 
     #[test]
