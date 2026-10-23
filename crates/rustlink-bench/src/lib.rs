@@ -11,6 +11,7 @@ pub mod alloc;
 pub mod blob_load;
 pub mod graph;
 pub mod measure;
+pub mod ngraph;
 pub mod plan;
 pub mod proc;
 pub mod registry;

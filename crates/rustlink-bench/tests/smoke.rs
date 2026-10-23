@@ -289,4 +289,19 @@ fn heap_bytes_per_node_equal_the_exact_structure_size() {
             (vertices * head + edges * edge) / vertices,
         );
     }
+
+    // Node graphs: one node per vertex; `Rc` adds its two counters (16 bytes, in the allocation
+    // with a 40-byte node) and an 8-byte owner slot.
+    for (variant, node_bytes) in [
+        ("rc", 8.0 + 16.0 + 40.0),
+        ("usize", 40.0),
+        ("u32", 20.0),
+        ("abs32", 20.0),
+        ("rel32", 20.0),
+        ("abs16", 12.0),
+        ("rel16", 12.0),
+        ("rel8", 8.0),
+    ] {
+        check(&cell("ngraph-mesh", variant, n), node_bytes);
+    }
 }
