@@ -98,7 +98,10 @@ target/release/rlb list              # workloads, their largest size and variant
 ```
 
 Each cell runs in its own process pinned to one CPU with `taskset`, so peak RSS is clean. Leave
-the machine idle while a sweep runs.
+the machine idle while a sweep runs, and check that it is first: `uptime` should show a load
+average near zero, and a per-core view (`top`, then `1`) should show the pinned core idle. The
+sweep pins to the core with the highest `cpuinfo_max_freq`; `--cpu N` chooses another, so pass an
+idle one if that core is busy.
 
 ### Reading the numbers
 

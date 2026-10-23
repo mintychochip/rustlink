@@ -110,11 +110,19 @@ trait CsrStore: Adjacency + Sized {
     fn build(graph: &Graph) -> Self;
 }
 
-fn offsets_of(graph: &Graph) -> impl Iterator<Item = usize> + '_ {
-    std::iter::once(0).chain(graph.degrees.iter().scan(0usize, |sum, &degree| {
-        *sum += usize::from(degree);
-        Some(*sum)
-    }))
+/// The `V + 1` prefix sums of the out-degrees, in one allocation of exactly that size.
+///
+/// `collect` over a `chain`/`scan` iterator cannot know its length and grows by doubling, which
+/// would report up to twice the memory the structure needs.
+fn offsets_of<T>(graph: &Graph, convert: impl Fn(usize) -> T) -> Vec<T> {
+    let mut offsets = Vec::with_capacity(graph.vertices() + 1);
+    let mut sum = 0usize;
+    offsets.push(convert(sum));
+    for &degree in &graph.degrees {
+        sum += usize::from(degree);
+        offsets.push(convert(sum));
+    }
+    offsets
 }
 
 struct CsrUsize {
@@ -135,7 +143,7 @@ impl CsrStore for CsrUsize {
 
     fn build(graph: &Graph) -> Self {
         CsrUsize {
-            offsets: offsets_of(graph).collect(),
+            offsets: offsets_of(graph, |o| o),
             targets: graph.targets.iter().map(|&t| t as usize).collect(),
         }
     }
@@ -160,7 +168,7 @@ impl CsrStore for CsrU32 {
 
     fn build(graph: &Graph) -> Self {
         CsrU32 {
-            offsets: offsets_of(graph).map(|o| o as u32).collect(),
+            offsets: offsets_of(graph, |o| o as u32),
             targets: graph.targets.clone(),
         }
     }
@@ -186,7 +194,7 @@ impl CsrStore for CsrAbs32 {
 
     fn build(graph: &Graph) -> Self {
         CsrAbs32 {
-            offsets: offsets_of(graph).map(|o| o as u32).collect(),
+            offsets: offsets_of(graph, |o| o as u32),
             targets: graph
                 .targets
                 .iter()

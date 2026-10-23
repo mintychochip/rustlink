@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use rustlink_bench::graph::Graph;
 use rustlink_bench::measure::Measurement;
 use rustlink_bench::registry;
 
@@ -210,4 +211,82 @@ fn sweep_dry_run_lists_cells_without_running_or_writing() {
     );
     assert!(!jsonl.exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Runs one cell through `rlb` and returns its measurement.
+fn cell(workload: &str, variant: &str, n: usize) -> Measurement {
+    let n = n.to_string();
+    let output = rlb(&[
+        "run",
+        "--workload",
+        workload,
+        "--variant",
+        variant,
+        "--n",
+        &n,
+        "--reps",
+        "2",
+    ]);
+    assert!(output.status.success(), "{workload} {variant}");
+    Measurement::from_json(String::from_utf8_lossy(&output.stdout).trim()).unwrap()
+}
+
+/// Heap bytes per node must equal the exact size of the structure. Slack, such as a `Vec`
+/// grown by doubling because `collect` could not know its length, would silently inflate one
+/// variant's reported memory and bias every memory comparison against it.
+#[test]
+fn heap_bytes_per_node_equal_the_exact_structure_size() {
+    let check = |m: &Measurement, expected: f64| {
+        assert_eq!(m.status, "done", "{} {}", m.workload, m.variant);
+        let error = (m.heap_bytes_per_node - expected).abs() / expected;
+        assert!(
+            error < 0.005,
+            "{} {}: heap {:.3} B/node, structure is {:.3}",
+            m.workload,
+            m.variant,
+            m.heap_bytes_per_node,
+            expected
+        );
+    };
+    let n = 4096;
+    let graph = Graph::generate(n, 1); // rlb's default seed
+    let (vertices, edges) = (n as f64, graph.edges() as f64);
+
+    // Trees: one node per element and nothing else.
+    for (variant, node_bytes) in [
+        ("box", 24.0),
+        ("usize", 24.0),
+        ("u32", 12.0),
+        ("abs32", 12.0),
+        ("abs16", 8.0),
+        ("rel32", 12.0),
+        ("rel16", 8.0),
+    ] {
+        check(&cell("bst-bulk", variant, n), node_bytes);
+    }
+
+    // CSR: V + 1 offsets and one entry per edge, both as wide as the variant's index.
+    for (variant, word) in [("usize", 8.0), ("u32", 4.0), ("abs32", 4.0)] {
+        check(
+            &cell("graph-csr", variant, n),
+            ((vertices + 1.0) * word + edges * word) / vertices,
+        );
+    }
+
+    // Linked lists: one head per vertex and one node per edge.
+    for (variant, head, edge) in [
+        ("box", 8.0, 16.0),
+        ("usize", 8.0, 16.0),
+        ("u32", 4.0, 8.0),
+        ("abs32", 4.0, 8.0),
+        ("rel32", 4.0, 8.0),
+        ("abs16", 4.0, 6.0),
+        ("rel16", 4.0, 6.0),
+        ("rel8", 4.0, 5.0),
+    ] {
+        check(
+            &cell("graph-linked-seq", variant, n),
+            (vertices * head + edges * edge) / vertices,
+        );
+    }
 }
