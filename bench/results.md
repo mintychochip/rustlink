@@ -4,8 +4,8 @@
 - Caches of the pinned CPU: L1d 48K, L2 3072K, L3 36864K
 - Kernel: 7.1.10-200.fc44.x86_64
 - Compiler: rustc 1.99.0-nightly (6f72b5dd5 2026-07-22)
-- Git revision: 17589d9
-- MemAvailable: 39.3 GiB
+- Git revision: 188c47a
+- MemAvailable: 32.2 GiB
 
 ## bst-random
 
@@ -348,7 +348,7 @@
 
 | variant | 2^10 | 2^12 | 2^14 | 2^16 | 2^18 | 2^20 | 2^22 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| box | 1.3 ± 0.3 | 3.8 ± 0.3 | 4.9 ± 0.0 | 6.7 ± 0.0 | 22.2 ± 0.7 | 22.0 ± 0.8 | 24.2 ± 0.0 |
+| box | skip | skip | skip | skip | skip | skip | skip |
 | usize | 1.1 ± 0.1 | 2.9 ± 0.4 | 4.1 ± 0.1 | 5.3 ± 0.1 | 8.1 ± 0.4 | 19.4 ± 0.1 | 25.6 ± 0.1 |
 | u32 | 1.0 ± 0.2 | 2.9 ± 0.1 | 3.7 ± 0.0 | 4.3 ± 0.0 | 5.9 ± 0.0 | 13.0 ± 0.3 | 22.2 ± 0.1 |
 | abs32 | 1.2 ± 0.4 | 3.5 ± 0.1 | 4.1 ± 0.1 | 4.9 ± 0.1 | 6.8 ± 0.1 | 13.9 ± 0.3 | 25.9 ± 0.1 |
@@ -361,7 +361,7 @@
 
 | variant | 2^10 | 2^12 | 2^14 | 2^16 | 2^18 | 2^20 | 2^22 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| box | 28.7 ± 0.6 | 38.9 ± 0.2 | 44.9 ± 0.2 | 46.7 ± 0.1 | 57.3 ± 0.1 | 56.4 ± 0.3 | 58.4 ± 1.1 |
+| box | skip | skip | skip | skip | skip | skip | skip |
 | usize | 1.7 ± 0.0 | 1.8 ± 0.1 | 2.0 ± 0.1 | 2.5 ± 0.1 | 4.4 ± 0.1 | 23.0 ± 0.1 | 24.6 ± 0.1 |
 | u32 | 1.6 ± 0.0 | 4.7 ± 0.3 | 5.4 ± 0.1 | 6.0 ± 0.4 | 8.8 ± 0.1 | 15.0 ± 0.2 | 16.0 ± 0.0 |
 | abs32 | 2.7 ± 0.4 | 6.3 ± 0.2 | 6.8 ± 0.1 | 7.1 ± 0.2 | 9.2 ± 0.0 | 15.3 ± 0.2 | 15.3 ± 0.2 |
@@ -374,7 +374,7 @@
 
 | variant | 2^10 | 2^12 | 2^14 | 2^16 | 2^18 | 2^20 | 2^22 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| box | 71.7 | 72.2 | 72.3 | 71.9 | 72.1 | 72.0 | 72.0 |
+| box | skip | skip | skip | skip | skip | skip | skip |
 | usize | 71.7 | 72.2 | 72.3 | 71.9 | 72.1 | 72.0 | 72.0 |
 | u32 | 35.9 | 36.1 | 36.1 | 36.0 | 36.0 | 36.0 | 36.0 |
 | abs32 | 35.9 | 36.1 | 36.1 | 36.0 | 36.0 | 36.0 | 36.0 |
@@ -387,7 +387,7 @@
 
 | variant | 2^10 | 2^12 | 2^14 | 2^16 | 2^18 | 2^20 | 2^22 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| box | 2.5 | 3.1 | 5.6 | 15.8 | 56.6 | 219.1 | 869.8 |
+| box | skip | skip | skip | skip | skip | skip | skip |
 | usize | 2.5 | 2.7 | 4.5 | 11.8 | 40.6 | 155.1 | 614.0 |
 | u32 | 2.5 | 2.6 | 4.0 | 9.4 | 31.4 | 119.1 | 469.9 |
 | abs32 | 2.5 | 2.8 | 3.9 | 9.4 | 31.4 | 119.1 | 469.7 |
@@ -400,7 +400,7 @@
 
 | variant | 2^10 | 2^12 | 2^14 | 2^16 | 2^18 | 2^20 | 2^22 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| box | 16 | 16 | 16 | 16 | 16 | 16 | 16 |
+| box | skip | skip | skip | skip | skip | skip | skip |
 | usize | 16 | 16 | 16 | 16 | 16 | 16 | 16 |
 | u32 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |
 | abs32 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |
@@ -411,6 +411,13 @@
 
 ### Notes
 
+- `box` at 2^10: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
+- `box` at 2^12: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
+- `box` at 2^14: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
+- `box` at 2^16: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
+- `box` at 2^18: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
+- `box` at 2^20: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
+- `box` at 2^22: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
 - `abs16` at 2^14: links do not fit: max distance 1, 100.0% within 127, 100.0% within 32767
 - `abs16` at 2^16: links do not fit: max distance 1, 100.0% within 127, 100.0% within 32767
 - `abs16` at 2^18: links do not fit: max distance 1, 100.0% within 127, 100.0% within 32767
@@ -423,7 +430,7 @@
 
 | variant | 2^10 | 2^12 | 2^14 | 2^16 | 2^18 | 2^20 | 2^22 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| box | 1.2 ± 0.3 | 3.7 ± 0.1 | 4.8 ± 0.1 | 7.3 ± 0.3 | 21.7 ± 1.4 | 21.6 ± 1.1 | 24.6 ± 0.2 |
+| box | skip | skip | skip | skip | skip | skip | skip |
 | usize | 1.1 ± 0.1 | 3.5 ± 0.3 | 5.0 ± 0.0 | 7.4 ± 0.1 | 12.7 ± 0.3 | 38.7 ± 0.5 | 48.8 ± 0.7 |
 | u32 | 1.0 ± 0.1 | 3.4 ± 0.1 | 4.5 ± 0.1 | 5.7 ± 0.0 | 9.0 ± 0.1 | 25.8 ± 0.1 | 41.7 ± 0.0 |
 | abs32 | 1.4 ± 0.5 | 3.9 ± 0.1 | 5.0 ± 0.1 | 6.3 ± 0.1 | 10.3 ± 0.2 | 27.4 ± 0.3 | 47.4 ± 0.2 |
@@ -436,7 +443,7 @@
 
 | variant | 2^10 | 2^12 | 2^14 | 2^16 | 2^18 | 2^20 | 2^22 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| box | 31.9 ± 0.9 | 47.2 ± 0.2 | 59.3 ± 0.1 | 82.8 ± 1.5 | 163.0 ± 0.6 | 456.2 ± 3.0 | 529.7 ± 1.7 |
+| box | skip | skip | skip | skip | skip | skip | skip |
 | usize | 1.6 ± 0.0 | 1.7 ± 0.0 | 1.7 ± 0.0 | 2.7 ± 0.2 | 4.6 ± 0.2 | 21.7 ± 0.3 | 24.8 ± 0.2 |
 | u32 | 1.6 ± 0.2 | 5.8 ± 0.3 | 6.5 ± 0.2 | 6.6 ± 0.0 | 9.0 ± 0.1 | 16.1 ± 0.1 | 15.7 ± 0.1 |
 | abs32 | 3.3 ± 0.9 | 7.4 ± 0.3 | 7.6 ± 0.0 | 8.2 ± 0.4 | 9.6 ± 0.1 | 15.8 ± 0.0 | 16.7 ± 0.3 |
@@ -449,7 +456,7 @@
 
 | variant | 2^10 | 2^12 | 2^14 | 2^16 | 2^18 | 2^20 | 2^22 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| box | 71.7 | 72.2 | 72.3 | 71.9 | 72.1 | 72.0 | 72.0 |
+| box | skip | skip | skip | skip | skip | skip | skip |
 | usize | 71.7 | 72.2 | 72.3 | 71.9 | 72.1 | 72.0 | 72.0 |
 | u32 | 35.9 | 36.1 | 36.1 | 36.0 | 36.0 | 36.0 | 36.0 |
 | abs32 | 35.9 | 36.1 | 36.1 | 36.0 | 36.0 | 36.0 | 36.0 |
@@ -462,7 +469,7 @@
 
 | variant | 2^10 | 2^12 | 2^14 | 2^16 | 2^18 | 2^20 | 2^22 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| box | 2.5 | 3.1 | 5.8 | 15.7 | 56.6 | 219.1 | 869.8 |
+| box | skip | skip | skip | skip | skip | skip | skip |
 | usize | 2.5 | 2.7 | 4.5 | 11.9 | 40.4 | 155.1 | 613.8 |
 | u32 | 2.5 | 2.6 | 4.1 | 9.3 | 31.3 | 119.1 | 469.7 |
 | abs32 | 2.6 | 2.8 | 3.9 | 9.4 | 31.4 | 119.2 | 469.9 |
@@ -475,7 +482,7 @@
 
 | variant | 2^10 | 2^12 | 2^14 | 2^16 | 2^18 | 2^20 | 2^22 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| box | 16 | 16 | 16 | 16 | 16 | 16 | 16 |
+| box | skip | skip | skip | skip | skip | skip | skip |
 | usize | 16 | 16 | 16 | 16 | 16 | 16 | 16 |
 | u32 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |
 | abs32 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |
@@ -486,6 +493,13 @@
 
 ### Notes
 
+- `box` at 2^10: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
+- `box` at 2^12: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
+- `box` at 2^14: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
+- `box` at 2^16: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
+- `box` at 2^18: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
+- `box` at 2^20: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
+- `box` at 2^22: layout fixed in 188c47a after the sweep; not re-measured (machine too busy), see bench/environment.txt
 - `abs16` at 2^14: links do not fit: max distance 65626, 0.3% within 127, 74.9% within 32767
 - `abs16` at 2^16: links do not fit: max distance 261227, 0.1% within 127, 23.5% within 32767
 - `abs16` at 2^18: links do not fit: max distance 1049768, 0.0% within 127, 6.1% within 32767

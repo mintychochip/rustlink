@@ -2,12 +2,15 @@ rustlink benchmark record
 =========================
 
 Files
-  results.jsonl   One row per cell (405). Every row is a verbatim line written by `sweep`, taken from
-                  the sweep named in replicates.tsv (column chosen_run).
-  results.md      The report, rendered from results.jsonl with `sweep --report-only`.
-  replicates.tsv  Per cell: the median traversal time, the background load and the time lost on the
-                  pinned CPU for each of the six sweeps, and which sweep results.jsonl uses. The
-                  selection below can be re-derived from this file alone.
+  results.jsonl    One row per cell (405). 391 rows are verbatim lines written by `sweep`, taken from the
+                   sweep named in replicates.tsv (column chosen_run). The other 14 (`box` in
+                   graph-linked-seq and graph-linked-shuf) are `skipped`: see "Skipped cells".
+  results.md       The report, rendered from results.jsonl with `sweep --report-only`.
+  replicates.tsv   Per measured cell (391 rows): the median traversal time, the background load and the
+                   time lost on the pinned CPU for each of the six sweeps, and which sweep results.jsonl
+                   uses. The selection below can be re-derived from this file alone.
+  box-paired.tsv   Every measurement of the 14 skipped `box` cells, and of the variants they were
+                   paired with, taken after the layout fix ("Skipped cells").
 
 Machine and settings
   CPU          Intel Core Ultra 7 270K Plus, 24 CPUs, no SMT; sweeps pinned to cpu2 (the CPU with the
@@ -16,8 +19,9 @@ Machine and settings
   Compiler     rustc 1.99.0-nightly (6f72b5dd5 2026-07-22), release profile (opt-level 3, fat LTO)
   Power        cpu2 scaling_governor powersave, energy_performance_preference balance_performance,
                intel_pstate no_turbo 0 (turbo on). Not changed.
-  Binaries     Built from 327e31f. Commit 17589d9 changes only the report renderer, which is why the
-               report header names that revision.
+  Binaries     The six sweeps ran binaries built from 327e31f. Commit 17589d9 changes only the report
+               renderer, which is why the report header names that revision. The runs in
+               box-paired.tsv used binaries built from 188c47a.
   Matrix       The default matrix: 405 cells, seed 1, 6 repetitions per cell (1 discarded warm-up and
                5 measured, inside one fresh process). No cell was skipped for memory.
 
@@ -44,33 +48,96 @@ Selection rule for a done cell
       each side, and
     * cpu2 lost at most max(20 ms, 2% of the cell's time) to other tasks.
   results.jsonl holds the eligible measurement with the lowest median traversal time (ties: the
-  lower run number). 293 of the 296 done cells have at least one eligible measurement; the other 3
+  lower run number). 279 of the 282 done cells have at least one eligible measurement; the other 3
   (bst-random/usize at 2^22, blob-lookup/abs16 at 2^14 and blob-lookup/rel16 at 2^12) use the same
   rule with fewer than 3.0 busy cores. The load of the chosen measurements has a median of 1.43 busy
-  cores and a maximum of 2.95. Unreachable cells are deterministic (they only report link distances);
-  their rows come from the least loaded sweep.
+  cores (90th percentile 1.86) and a maximum of 2.95. Unreachable cells are deterministic (they only
+  report link distances); their rows come from the least loaded sweep.
 
-What the load does (the reason for the rule)
+What the load did to the sweeps (the reason for the rule)
   Median ratio of a measurement to the fastest measurement of the same cell, cells of 2^18 nodes or
-  more, grouped by the load during the measurement (all six sweeps, cpu2 loss within the rule):
+  more that ran longer than 0.05 s, grouped by the load during the measurement (all six sweeps, cpu2
+  loss within the rule):
     other busy cores   <1.5    1.5-2   2-3     3-4     4-6     >=6
-    all sizes          1.002   1.029   1.054   1.072   1.125   1.152
-    2^20 only          1.000   1.057   1.112   1.162   1.246   1.146 (4 cells)
+    all sizes          1.001   1.028   1.056   1.072   1.125   1.156
+    2^20 only          1.000   1.056   1.113   1.164   1.246   1.238 (3 cells)
   Cells of 2^20 nodes (12 MiB of 12-byte nodes: bigger than the 3 MiB L2, inside the shared L3) are
-  the most sensitive.
+  the most sensitive. This held from 05:56 to 08:08. It did not hold later: see "Skipped cells".
 
 How far the eligible measurements of a cell agree (per cell max / min of the traversal medians;
 cells with at least two eligible measurements)
     size       2^10   2^12   2^14   2^16   2^18   2^20   2^22   2^24
-    median     1.105  1.035  1.019  1.025  1.026  1.076  1.035  1.039
-    90th pct   1.497  1.163  1.062  1.046  1.075  1.170  1.084  1.044
+    median     1.102  1.033  1.019  1.023  1.025  1.076  1.035  1.039
+    90th pct   1.484  1.179  1.063  1.043  1.075  1.168  1.085  1.044
   The in-process MAD in the report does not show this: it measures the five repetitions of one
   process, while the spread above includes different processes (different physical page layout) and
-  different times. Cells of 2^12 nodes and fewer take microseconds per repetition and are only
-  indicative; the other tables are good to a few percent, and about 8% at 2^20.
+  different times. Typical disagreement is 2 to 4% from 2^14 to 2^24, but at 2^20 it is 8% at the
+  median and 17% at the 90th percentile (28% for the worst single cells, below), and 2^18 reaches 7.5%
+  at the 90th percentile. Cells of 2^12 nodes and fewer take microseconds per repetition and are only
+  indicative. Read differences below 10% as ties, and below 20% at 2^20 as unresolved.
+  Taking the fastest of K eligible measurements averages 2% below their median (K = 2 to 5; 4% at
+  2^20), so a cell with few eligible measurements looks slightly slower than one with many. The count
+  is the eligible_runs column of replicates.tsv (0: 3 cells, 1: 30, 2: 82, 3: 96, 4: 44, 5: 27).
+
+How close the chosen value is to the fastest of the six sweeps
+  For the 114 measured cells of 2^18 nodes and more, the chosen value is the fastest of all six sweeps
+  in 94 cases, within 3% in 104 and within 5% in 108. Four are more than 10% above it (blob-load/rel32
+  at 2^24: 1.44x, bst-random/usize at 2^20: 1.20x, blob-lookup/rel32 at 2^24: 1.17x, blob-load/abs32
+  at 2^24: 1.12x); their faster measurements came from sweeps whose load was just over the 2.0 line
+  (2.07 to 2.65), so they show the per-process variation, not a failed rule.
+
+Cells quoted in the README (traversal ns): chosen value (fastest-slowest of the eligible measurements,
+number of eligible measurements K)
+    bst-bulk 2^22            abs32 150.8 (150.8-161.8, K=4)   u32 152.5 (152.5-163.0, K=3)   box 258.1 (258.1-266.8, K=2)
+    bst-random 2^20          abs32 187.6 (187.6-216.0, K=3)   u32 189.5 (189.5-242.7, K=5)   box 431.3 (431.3-464.2, K=3)
+    ast 2^22                 abs32 10.2 (10.2-10.7, K=5)   u32 10.1 (10.1-10.3, K=3)   box 13.3 (13.3-14.0, K=2)
+    graph-linked-seq 2^20    rel8 16.1 (16.1-17.0, K=3)   rel16 16.6 (16.6-20.2, K=4)   abs32 13.9 (13.9-15.5, K=2)   u32 13.0 (13.0-14.3, K=3)
+    graph-linked-seq 2^22    rel8 33.8 (33.8-35.2, K=2)   rel16 34.5 (34.5-35.2, K=3)   rel32 31.7 (31.7-32.3, K=2)   abs32 25.9 (25.9-26.5, K=2)   u32 22.2 (22.2-22.8, K=3)
+    graph-linked-shuf 2^20   abs32 27.4 (27.4-30.8, K=3)   u32 25.8 (25.8-27.5, K=2)
+    blob-load 2^22 (verify)  abs32 1.3 (1.3-1.4, K=4)   rel32 1.1 (1.1-1.4, K=3)
+    blob-lookup 2^22         abs32 151.2 (151.2-159.0, K=3)   rel32 168.2 (K=1)
+    ast 2^20 (gate)          abs32 9.5 (9.5-10.0, K=5)   rel32 9.6 (9.6-10.2, K=4)   ast-bytes 7.9 (7.9-8.3, K=3)
+    ast 2^22 (gate)          abs32 10.2 (10.2-10.7, K=5)   rel32 10.3 (10.3-10.7, K=4)   ast-bytes 8.3 (8.3-8.5, K=4)
+    ast 2^24 (gate)          abs32 10.4 (10.4-10.6, K=3)   rel32 10.4 (10.4-10.9, K=4)   ast-bytes 8.5 (8.5-8.5, K=3)
+
+Skipped cells: `box` in graph-linked-seq and graph-linked-shuf (14 cells)
+  In the six sweeps the pointer variant of these two workloads allocated each vertex's edges one
+  vertex at a time, tail first, whatever the plan's slot order. With a shuffled plan 99.9% of the
+  chain steps were still adjacent in memory, so `box` measured best-case locality in
+  graph-linked-shuf, and in graph-linked-seq it laid each chain out backwards. Commit 188c47a
+  allocates every edge in slot order, as the index variants lay out their arrays. The sweeps' rows
+  for these cells describe a layout the benchmark no longer has, so they are not used.
+
+  The fixed variant could not be measured under the rule. A collector that started a cell only after
+  the other CPUs had been quiet for three seconds made no attempt in 28 minutes. Between 08:28 and
+  09:54 each cell was measured 34 times (10 rounds of the 14 cells, then 24 rounds that also measured
+  u32, abs32 and, in graph-linked-seq, rel8 at 2^20 and 2^22). In the 24 paired rounds the other CPUs
+  averaged a median of 4.2 busy cores (10th to 90th percentile 2.4 to 9.2, lowest 1.8), and the load no
+  longer behaved as in the sweeps. The u32 reference measured in the same rounds ran 1.2x to 1.45x
+  slower than its quiet value even below 3 busy cores (about 1.06x at 2 to 3 in the sweeps), and its
+  fastest measurement was never closer than 1.17x. The other sessions were putting a memory-system
+  load on the machine that the count of busy cores does not capture. No absolute `box` time taken
+  then is usable, so the cells are skipped instead of holding inflated numbers. To fill them on an
+  idle machine:
+      target/release/sweep --workloads graph-linked-seq,graph-linked-shuf --variants box
+      target/release/sweep --report-only
+  (the report keeps the last measurement of a cell).
+
+  Ratios of paired measurements are more robust: `box` and its reference ran within a minute of each
+  other under the same load. Median over the 24 rounds of the per-round ratio box time / reference
+  time, with the interquartile range (linear interpolation; recompute it from box-paired.tsv):
+                graph-linked-seq 2^20   graph-linked-seq 2^22   graph-linked-shuf 2^20   graph-linked-shuf 2^22
+    u32         1.42 (1.28-1.63)        0.91 (0.88-0.92)        1.34 (1.21-1.43)         0.81 (0.80-0.83)
+    abs32       1.25 (1.12-1.60)        0.89 (0.84-0.92)        1.58 (1.40-1.75)         0.88 (0.87-0.90)
+    rel8        1.19 (1.06-1.39)        0.68 (0.66-0.71)        -                        -
+  At 2^22 the pointer variant is as fast as, or faster than, the index variants in both layouts; at
+  2^20 it is 1.2x to 1.6x slower. Whether contention hurts the larger pointer heap (72 B per vertex
+  against 36) more than the index variants is not known, so the quiet ratios may differ.
 
 Reproduce
-  cargo build --release --bins && target/release/sweep     (one sweep; keep the machine idle)
-  Check the load of a sweep the way this record did: sample /proc/stat (busy jiffies of every CPU
-  except the pinned one) and /proc/schedstat (the pinned CPU's rq_run_delay) while it runs. Repeat
-  sweeps and keep the least disturbed measurement per cell if the machine cannot be idle.
+  cargo build --release --bins && target/release/sweep --out my.jsonl --md my.md   (keep the machine idle)
+  Check the load the way this record did: sample /proc/stat (busy jiffies of every CPU except the
+  pinned one) and /proc/schedstat (the pinned CPU's rq_run_delay) while it runs. If the machine cannot
+  be idle, repeat sweeps and keep the least disturbed measurement per cell, and measure a reference
+  cell (for example u32 of the same workload and size) next to anything you want to trust: the count
+  of busy cores alone stopped predicting the slowdown from about 09:00 on 2026-10-23.
