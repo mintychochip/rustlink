@@ -7,6 +7,7 @@ use std::process::Command;
 
 use crate::measure::Measurement;
 use crate::proc::mem_available_kib;
+use crate::registry;
 
 /// Machine description recorded in the report header.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -134,7 +135,8 @@ pub fn render(measurements: &[Measurement], info: &MachineInfo) -> String {
         info.mem_available_kib as f64 / 1_048_576.0
     );
 
-    let latest = latest_per_cell(measurements);
+    let mut latest = latest_per_cell(measurements);
+    sort_in_registry_order(&mut latest);
     for workload in unique_in_order(latest.iter().map(|m| m.workload.as_str())) {
         let cells: Vec<&Measurement> = latest
             .iter()
@@ -161,6 +163,34 @@ fn latest_per_cell(measurements: &[Measurement]) -> Vec<&Measurement> {
         }
     }
     latest
+}
+
+/// Orders cells as the registry lists them: workloads as registered, each workload's variants as
+/// it declares them, sizes ascending. A sweep runs its cells in shuffled order, so the order of
+/// the results says nothing about the order of the report. Names the registry does not know sort
+/// last, alphabetically.
+fn sort_in_registry_order(cells: &mut [&Measurement]) {
+    type Registered<'r> = Vec<(&'r str, &'r [&'r str])>;
+    fn rank<'a>(
+        registered: &Registered,
+        m: &'a Measurement,
+    ) -> (usize, &'a str, usize, &'a str, u64) {
+        let workload = registered.iter().position(|(name, _)| *name == m.workload);
+        let variant = workload.and_then(|w| registered[w].1.iter().position(|v| *v == m.variant));
+        (
+            workload.unwrap_or(usize::MAX),
+            m.workload.as_str(),
+            variant.unwrap_or(usize::MAX),
+            m.variant.as_str(),
+            m.n,
+        )
+    }
+
+    let registered: Registered = registry::all()
+        .iter()
+        .map(|workload| (workload.name(), workload.variants()))
+        .collect();
+    cells.sort_by(|a, b| rank(&registered, a).cmp(&rank(&registered, b)));
 }
 
 fn render_workload(out: &mut String, workload: &str, cells: &[&Measurement]) {
@@ -512,6 +542,45 @@ mod tests {
                 text.contains("| 2^20 | rel32 | 12.0 | 6.0 | 2.00 | 90.0 | 100.0 | 1.11 | fail |")
             );
         }
+    }
+
+    #[test]
+    fn workloads_variants_sizes_and_notes_follow_registry_order_whatever_order_cells_ran_in() {
+        // A sweep runs its cells in shuffled order and appends them in that order.
+        let mut unreachable_small = cell("bst-bulk", "rel8", 1 << 10, "unreachable");
+        unreachable_small.note = "small".to_owned();
+        let mut unreachable_large = cell("bst-bulk", "rel8", 1 << 12, "unreachable");
+        unreachable_large.note = "large".to_owned();
+        let ms = [
+            cell("ast", "box", 1 << 10, "done"),
+            unreachable_large,
+            cell("bst-bulk", "u32", 1 << 12, "done"),
+            cell("ast", "abs32", 1 << 10, "done"),
+            cell("bst-bulk", "box", 1 << 10, "done"),
+            unreachable_small,
+            cell("bst-bulk", "u32", 1 << 10, "done"),
+        ];
+        let text = render(&ms, &info());
+        let at = |needle: &str| {
+            text.find(needle)
+                .unwrap_or_else(|| panic!("{needle} missing"))
+        };
+
+        assert!(
+            at("## bst-bulk") < at("## ast"),
+            "workloads follow the registry"
+        );
+        let table = &text[at("## bst-bulk")..at("## ast")];
+        let row = |variant: &str| table.find(&format!("| {variant} |")).expect("row");
+        assert!(
+            row("box") < row("u32") && row("u32") < row("rel8"),
+            "variants follow the workload"
+        );
+        assert!(table.contains("| variant | 2^10 | 2^12 |"), "sizes ascend");
+        assert!(
+            at("`rel8` at 2^10") < at("`rel8` at 2^12"),
+            "notes ascend by size"
+        );
     }
 
     #[test]
