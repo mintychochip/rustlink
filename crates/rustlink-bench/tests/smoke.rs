@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use rustlink_bench::btree;
 use rustlink_bench::graph::Graph;
 use rustlink_bench::measure::Measurement;
 use rustlink_bench::registry;
@@ -58,7 +59,8 @@ fn every_workload_and_variant_runs_at_n_1024_and_prints_one_valid_json_line() {
             assert!(m.peak_rss_kib > 0);
             if m.status == "done" {
                 assert!(
-                    m.traverse_ns_median > 0.0 && m.node_bytes > 0,
+                    // std's B-tree nodes are private, so its node size is reported as 0
+                    m.traverse_ns_median > 0.0 && (m.node_bytes > 0 || variant == "std"),
                     "{} {variant}",
                     workload.name()
                 );
@@ -303,5 +305,58 @@ fn heap_bytes_per_node_equal_the_exact_structure_size() {
         ("rel8", 8.0),
     ] {
         check(&cell("ngraph-mesh", variant, n), node_bytes);
+    }
+
+    // B-trees: full leaves and inner nodes of the node size, one region per level, so the
+    // memory per key follows from the node counts. A box is an enum of both kinds, so every
+    // node of the `box` variant is `node_bytes` (the reported enum size).
+    let n = 1 << 16;
+    let keys = btree::keys(n, 1).len();
+    let counts = |leaf_cap: usize, fanout: usize| {
+        let mut width = keys.div_ceil(leaf_cap).max(1);
+        let (leaves, mut inner) = (width, 0);
+        while width > 1 {
+            width = width.div_ceil(fanout);
+            inner += width;
+        }
+        (leaves as f64, inner as f64)
+    };
+    for (workload, leaf_cap, cases) in [
+        // variant, children per inner node, leaf bytes, inner bytes
+        (
+            "btree-64",
+            15,
+            [
+                ("usize", 5, 64.0, 64.0),
+                ("u32", 8, 64.0, 64.0),
+                ("abs32", 8, 62.0, 62.0),
+                ("abs16", 11, 62.0, 64.0),
+            ],
+        ),
+        (
+            "btree-256",
+            63,
+            [
+                ("usize", 21, 256.0, 256.0),
+                ("u32", 32, 256.0, 256.0),
+                ("abs32", 32, 254.0, 254.0),
+                ("abs16", 43, 254.0, 256.0),
+            ],
+        ),
+    ] {
+        for (variant, fanout, leaf_bytes, inner_bytes) in cases {
+            let (leaves, inner) = counts(leaf_cap, fanout);
+            check(
+                &cell(workload, variant, n),
+                (leaves * leaf_bytes + inner * inner_bytes) / keys as f64,
+            );
+        }
+        let fanout = if workload == "btree-64" { 5 } else { 21 };
+        let (leaves, inner) = counts(leaf_cap, fanout);
+        let boxed = cell(workload, "box", n);
+        check(
+            &boxed,
+            (leaves + inner) * boxed.node_bytes as f64 / keys as f64,
+        );
     }
 }
