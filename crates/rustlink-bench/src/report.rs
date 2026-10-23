@@ -145,7 +145,13 @@ pub fn render(measurements: &[Measurement], info: &MachineInfo) -> String {
             .collect();
         render_workload(&mut out, workload, &cells);
     }
-    render_gate(&mut out, &latest);
+    // The gate compares `ast-bytes` with `ast`; a report of other workloads has nothing to say.
+    if latest
+        .iter()
+        .any(|m| m.workload == "ast" || m.workload == "ast-bytes")
+    {
+        render_gate(&mut out, &latest);
+    }
     out
 }
 
@@ -581,6 +587,13 @@ mod tests {
             at("`rel8` at 2^10") < at("`rel8` at 2^12"),
             "notes ascend by size"
         );
+    }
+
+    #[test]
+    fn a_report_without_expression_tree_data_has_no_layer_4_gate() {
+        let text = render(&[cell("ngraph-mesh", "u32", 1 << 12, "done")], &info());
+        assert!(text.contains("## ngraph-mesh"));
+        assert!(!text.contains("Layer-4 gate"));
     }
 
     #[test]
