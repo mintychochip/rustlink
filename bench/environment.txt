@@ -1,0 +1,76 @@
+rustlink benchmark record
+=========================
+
+Files
+  results.jsonl   One row per cell (405). Every row is a verbatim line written by `sweep`, taken from
+                  the sweep named in replicates.tsv (column chosen_run).
+  results.md      The report, rendered from results.jsonl with `sweep --report-only`.
+  replicates.tsv  Per cell: the median traversal time, the background load and the time lost on the
+                  pinned CPU for each of the six sweeps, and which sweep results.jsonl uses. The
+                  selection below can be re-derived from this file alone.
+
+Machine and settings
+  CPU          Intel Core Ultra 7 270K Plus, 24 CPUs, no SMT; sweeps pinned to cpu2 (the CPU with the
+               highest cpuinfo_max_freq, 5.5 GHz). Caches of cpu2: L1d 48K, L2 3 MiB, L3 36 MiB shared.
+  Kernel       7.1.10-200.fc44.x86_64
+  Compiler     rustc 1.99.0-nightly (6f72b5dd5 2026-07-22), release profile (opt-level 3, fat LTO)
+  Power        cpu2 scaling_governor powersave, energy_performance_preference balance_performance,
+               intel_pstate no_turbo 0 (turbo on). Not changed.
+  Binaries     Built from 327e31f. Commit 17589d9 changes only the report renderer, which is why the
+               report header names that revision.
+  Matrix       The default matrix: 405 cells, seed 1, 6 repetitions per cell (1 discarded warm-up and
+               5 measured, inside one fresh process). No cell was skipped for memory.
+
+Why six sweeps
+  The machine is a desktop shared with other sessions that build and test in parallel (load average
+  above 30 at times). Background load slows large cells measurably, so one sweep is not a trustworthy
+  record. Six complete sweeps of the same matrix and seed were taken, and for each cell the sweep
+  taken under the least interference is used.
+
+  run  window (2026-10-23)  other CPUs busy   lost on cpu2   invocation
+  1    05:56:41-06:06:20    1.68 cores        0.2 s          sweep (one invocation, whole matrix)
+  2    06:08:01-06:18:41    5.46 cores        10.8 s         sweep (same)
+  3    07:27:25-07:37:42    5.43 cores        1.9 s          sweep --workloads W, one per workload
+  4    07:37:42-07:47:35    3.28 cores        4.6 s          (same, workload order rotated per run)
+  5    07:47:35-07:58:02    2.47 cores        87.5 s         (same)
+  6    07:58:02-08:08:25    4.31 cores        11.5 s         (same)
+  "Other CPUs busy" is the mean number of busy CPUs other than cpu2, "lost" the time tasks waited for
+  cpu2 while the benchmark ran (both sampled from /proc/stat and /proc/schedstat at 10 Hz by a monitor
+  pinned to another CPU). The sweep drivers and the monitor were kept off cpu2 with taskset.
+
+Selection rule for a done cell
+  A sweep's measurement of a cell is eligible if
+    * the other CPUs averaged fewer than 2.0 busy cores over the cell's time window padded by 0.5 s on
+      each side, and
+    * cpu2 lost at most max(20 ms, 2% of the cell's time) to other tasks.
+  results.jsonl holds the eligible measurement with the lowest median traversal time (ties: the
+  lower run number). 293 of the 296 done cells have at least one eligible measurement; the other 3
+  (bst-random/usize at 2^22, blob-lookup/abs16 at 2^14 and blob-lookup/rel16 at 2^12) use the same
+  rule with fewer than 3.0 busy cores. The load of the chosen measurements has a median of 1.43 busy
+  cores and a maximum of 2.95. Unreachable cells are deterministic (they only report link distances);
+  their rows come from the least loaded sweep.
+
+What the load does (the reason for the rule)
+  Median ratio of a measurement to the fastest measurement of the same cell, cells of 2^18 nodes or
+  more, grouped by the load during the measurement (all six sweeps, cpu2 loss within the rule):
+    other busy cores   <1.5    1.5-2   2-3     3-4     4-6     >=6
+    all sizes          1.002   1.029   1.054   1.072   1.125   1.152
+    2^20 only          1.000   1.057   1.112   1.162   1.246   1.146 (4 cells)
+  Cells of 2^20 nodes (12 MiB of 12-byte nodes: bigger than the 3 MiB L2, inside the shared L3) are
+  the most sensitive.
+
+How far the eligible measurements of a cell agree (per cell max / min of the traversal medians;
+cells with at least two eligible measurements)
+    size       2^10   2^12   2^14   2^16   2^18   2^20   2^22   2^24
+    median     1.105  1.035  1.019  1.025  1.026  1.076  1.035  1.039
+    90th pct   1.497  1.163  1.062  1.046  1.075  1.170  1.084  1.044
+  The in-process MAD in the report does not show this: it measures the five repetitions of one
+  process, while the spread above includes different processes (different physical page layout) and
+  different times. Cells of 2^12 nodes and fewer take microseconds per repetition and are only
+  indicative; the other tables are good to a few percent, and about 8% at 2^20.
+
+Reproduce
+  cargo build --release --bins && target/release/sweep     (one sweep; keep the machine idle)
+  Check the load of a sweep the way this record did: sample /proc/stat (busy jiffies of every CPU
+  except the pinned one) and /proc/schedstat (the pinned CPU's rq_run_delay) while it runs. Repeat
+  sweeps and keep the least disturbed measurement per cell if the machine cannot be idle.
