@@ -348,6 +348,13 @@ impl LinkedStore for LinkedBox {
     const LIMIT: Limit = Limit::None;
 
     fn build(plan: &EdgePlan) -> Self {
+        // Allocate every edge in slot order, as the index variants lay theirs out, so a shuffled
+        // plan scatters the heap the same way; then link each vertex's chain, tail first.
+        let mut slots: Vec<Option<Box<BoxEdge>>> = plan
+            .edges
+            .iter()
+            .map(|&(to, _)| Some(Box::new(BoxEdge { to, next: None })))
+            .collect();
         let mut chain: Vec<u32> = Vec::new();
         let heads = plan
             .heads
@@ -361,10 +368,11 @@ impl LinkedStore for LinkedBox {
                 }
                 let mut next = None;
                 for &slot in chain.iter().rev() {
-                    next = Some(Box::new(BoxEdge {
-                        to: plan.edges[slot as usize].0,
-                        next,
-                    }));
+                    let mut edge = slots[slot as usize]
+                        .take()
+                        .expect("every slot belongs to one chain");
+                    edge.next = next;
+                    next = Some(edge);
                 }
                 next
             })
@@ -757,6 +765,40 @@ mod tests {
                 assert_eq!(bfs(&LinkedRel8::build(&plan), n), expected);
             }
         }
+    }
+
+    /// The fraction of chain steps, from an edge to the next edge of its vertex, whose two edges
+    /// sit within one allocator chunk of each other.
+    fn adjacent_chain_steps(store: &LinkedBox) -> f64 {
+        let (mut steps, mut adjacent) = (0usize, 0usize);
+        for head in &store.heads {
+            let mut edge = head.as_deref();
+            while let Some(current) = edge {
+                edge = current.next.as_deref();
+                if let Some(next) = edge {
+                    let gap = (std::ptr::from_ref(next) as usize)
+                        .abs_diff(std::ptr::from_ref(current) as usize);
+                    steps += 1;
+                    adjacent += usize::from(gap <= 64);
+                }
+            }
+        }
+        adjacent as f64 / steps as f64
+    }
+
+    #[test]
+    fn boxed_edges_are_allocated_in_slot_order_so_a_shuffled_plan_scatters_them() {
+        let graph = Graph::generate(4096, 7);
+        let local = adjacent_chain_steps(&LinkedBox::build(&EdgePlan::new(&graph, false, 7)));
+        let scattered = adjacent_chain_steps(&LinkedBox::build(&EdgePlan::new(&graph, true, 7)));
+        assert!(
+            local > 0.5,
+            "sequential plan: {local:.3} of the chain steps are adjacent"
+        );
+        assert!(
+            scattered < 0.2,
+            "shuffled plan: {scattered:.3} of the chain steps are adjacent"
+        );
     }
 
     #[test]
