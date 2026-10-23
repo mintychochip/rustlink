@@ -303,6 +303,8 @@ fn heap_bytes_per_node_equal_the_exact_structure_size() {
         ("abs16", 12.0),
         ("rel16", 12.0),
         ("rel8", 8.0),
+        ("abs32-idx", 20.0),
+        ("rel16-idx", 12.0),
     ] {
         check(&cell("ngraph-mesh", variant, n), node_bytes);
     }

@@ -17,14 +17,17 @@
 //!
 //! The variants are `rc` (an `Rc` per node with `Weak` links, the safe idiom for cyclic graphs),
 //! `usize` and `u32` (hand-written indices in a `Vec`, what petgraph does), and rustlink `abs*`
-//! and `rel*` links in an [`Arena`], followed through [`Cursor::follow`].
+//! and `rel*` links in an [`Arena`], followed through [`Cursor::follow`]. `abs32-idx` and `rel16-idx`
+//! read the same arenas without a `Cursor`: the public [`Link::target`] decodes the link and the
+//! index is checked and used on the arena's slice. They separate what the `Cursor` access path
+//! costs from what the link representation costs.
 
 #![allow(clippy::unnecessary_cast)]
 
 use std::cell::OnceCell;
 use std::rc::{Rc, Weak};
 
-use rustlink::{Arena, Cursor, OptAbs, OptRel, Region, Width};
+use rustlink::{Arena, Cursor, Link, OptAbs, OptRel, Region, Target, Width};
 use zerocopy::byteorder::little_endian::U32;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
@@ -408,6 +411,56 @@ narrow_graph! {
     |owner, target| OptRel::new(owner, target)
 }
 
+/// Rustlink links read without a `Cursor`: the arena of `$inner`, a link decoded by
+/// [`Link::target`] and the index it gives checked against the slice it indexes.
+macro_rules! indexed_graph {
+    ($(#[$doc:meta])* $store:ident, $inner:ident) => {
+        $(#[$doc])*
+        struct $store($inner);
+
+        impl NodeStore for $store {
+            type Ref<'a> = usize;
+
+            const NODE_BYTES: usize = <$inner as NodeStore>::NODE_BYTES;
+            const LIMIT: Limit = <$inner as NodeStore>::LIMIT;
+
+            fn build(plan: &NodePlan) -> Self {
+                $store(<$inner as NodeStore>::build(plan))
+            }
+
+            fn len(&self) -> usize {
+                self.0.arena.len()
+            }
+
+            fn node(&self, index: usize) -> Option<usize> {
+                (index < self.0.arena.len()).then_some(index)
+            }
+
+            fn payload(&self, node: &usize) -> u32 {
+                self.0.arena.as_slice()[*node].payload.get()
+            }
+
+            fn link(&self, node: &usize, k: usize) -> Option<usize> {
+                let nodes = self.0.arena.as_slice();
+                match nodes[*node].edges[k].target(*node) {
+                    Target::Index(target) if target < nodes.len() => Some(target),
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+indexed_graph! {
+    /// The `abs32` arena read by decoding links and indexing the slice (20-byte nodes).
+    Abs32Idx, Abs32Graph
+}
+
+indexed_graph! {
+    /// The `rel16` arena read by decoding links and indexing the slice (12-byte nodes).
+    Rel16Idx, Rel16Graph
+}
+
 /// One node of the `Rc` graph. The links are weak because a graph has cycles, and are set once
 /// after every node exists.
 struct RcNode {
@@ -563,7 +616,16 @@ impl Workload for NodeGraph {
 
     fn variants(&self) -> &'static [&'static str] {
         &[
-            "rc", "usize", "u32", "abs32", "abs16", "rel32", "rel16", "rel8",
+            "rc",
+            "usize",
+            "u32",
+            "abs32",
+            "abs32-idx",
+            "abs16",
+            "rel32",
+            "rel16",
+            "rel16-idx",
+            "rel8",
         ]
     }
 
@@ -583,9 +645,11 @@ impl Workload for NodeGraph {
             "usize" => run_store::<UsizeGraph>(self.0, params, &plan, &reach),
             "u32" => run_store::<U32Graph>(self.0, params, &plan, &reach),
             "abs32" => run_store::<Abs32Graph>(self.0, params, &plan, &reach),
+            "abs32-idx" => run_store::<Abs32Idx>(self.0, params, &plan, &reach),
             "abs16" => run_store::<Abs16Graph>(self.0, params, &plan, &reach),
             "rel32" => run_store::<Rel32Graph>(self.0, params, &plan, &reach),
             "rel16" => run_store::<Rel16Graph>(self.0, params, &plan, &reach),
+            "rel16-idx" => run_store::<Rel16Idx>(self.0, params, &plan, &reach),
             "rel8" => run_store::<Rel8Graph>(self.0, params, &plan, &reach),
             other => Err(format!("unknown variant `{other}`")),
         }
@@ -748,6 +812,8 @@ mod tests {
                 agrees::<Rel32Graph>(&plan, &what);
                 agrees::<Rel16Graph>(&plan, &what);
                 agrees::<Rel8Graph>(&plan, &what);
+                agrees::<Abs32Idx>(&plan, &what);
+                agrees::<Rel16Idx>(&plan, &what);
             }
         }
     }
@@ -771,6 +837,8 @@ mod tests {
         assert_eq!(size_of::<Rel8Node>(), 8);
         // two reference counts, the payload, its padding and four weak links
         assert_eq!(RcGraph::NODE_BYTES, 16 + 4 + 4 + 32);
+        assert_eq!(Abs32Idx::NODE_BYTES, 20);
+        assert_eq!(Rel16Idx::NODE_BYTES, 12);
     }
 
     #[test]
