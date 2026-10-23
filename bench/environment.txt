@@ -11,6 +11,8 @@ Files
                    uses. The selection below can be re-derived from this file alone.
   box-paired.tsv   Every measurement of the 14 skipped `box` cells, and of the variants they were
                    paired with, taken after the layout fix ("Skipped cells").
+  box-refgated.tsv Every attempt of the reference-gated retry for the same cells ("Skipped cells"):
+                   the two `usize` readings around each `box` reading, their bound and the load.
 
 Machine and settings
   CPU          Intel Core Ultra 7 270K Plus, 24 CPUs, no SMT; sweeps pinned to cpu2 (the CPU with the
@@ -19,11 +21,15 @@ Machine and settings
   Compiler     rustc 1.99.0-nightly (6f72b5dd5 2026-07-22), release profile (opt-level 3, fat LTO)
   Power        cpu2 scaling_governor powersave, energy_performance_preference balance_performance,
                intel_pstate no_turbo 0 (turbo on). Not changed.
-  Binaries     The six sweeps ran binaries built from 327e31f. Commit 17589d9 changes only the report
-               renderer, which is why the report header names that revision. The runs in
-               box-paired.tsv used binaries built from 188c47a.
+  Binaries     The six sweeps ran binaries built from 327e31f, which has the old `box` layout in the
+               two linked-list graph workloads (see "Skipped cells"). The later runs of the `box`
+               cells ran binaries built from 188c47a or later. Those differ from 327e31f only in the
+               report renderer (17589d9) and in that layout (188c47a). The git revision in the
+               report header is the checkout the report was last rendered from, not the revision of
+               the binaries that measured.
   Matrix       The default matrix: 405 cells, seed 1, 6 repetitions per cell (1 discarded warm-up and
-               5 measured, inside one fresh process). No cell was skipped for memory.
+               5 measured, inside one fresh process). No cell was skipped for memory; 14 were skipped
+               for another reason ("Skipped cells").
 
 Why six sweeps
   The machine is a desktop shared with other sessions that build and test in parallel (load average
@@ -122,6 +128,21 @@ Skipped cells: `box` in graph-linked-seq and graph-linked-shuf (14 cells)
       target/release/sweep --workloads graph-linked-seq,graph-linked-shuf --variants box
       target/release/sweep --report-only
   (the report keeps the last measurement of a cell).
+
+  A second try replaced the busy-core count by a direct check. Each attempt measured the `usize`
+  variant of the same workload and size (it has the same 72 B per vertex as `box`), then `box`, then
+  `usize` again, and kept the `box` reading only if both `usize` readings were at or below the larger
+  of its slowest eligible reading in the six sweeps and 1.05x its quiet value, and the pinned CPU
+  lost at most max(20 ms, 2%) of each measurement to other tasks. The first 60 minutes (10:11 to
+  11:11) also waited until the other CPUs had been at most 3 busy for three seconds, and made 2
+  attempts. The next 45 minutes did not wait and made 217. Six attempts passed, for cells of 2^16
+  nodes or fewer (graph-linked-seq at 2^10, 2^12, 2^14 and 2^16; graph-linked-shuf at 2^14 and
+  2^16), and none of the 150 attempts for 2^18, 2^20 and 2^22: there the lowest `usize` readings
+  were 1.26x, 1.12x and 1.04x their quiet values (medians 1.92x, 1.28x and 1.13x), with the other
+  CPUs at a median of 10.7 busy cores. Every attempt is in box-refgated.tsv. The six passes are not
+  used: they cannot complete the cells that carry the README's claims, a row with some cells
+  measured under another rule would mislead, and the gate is weak at 2^10, where its bound is 1.5x
+  the quiet value.
 
   Ratios of paired measurements are more robust: `box` and its reference ran within a minute of each
   other under the same load. Median over the 24 rounds of the per-round ratio box time / reference
