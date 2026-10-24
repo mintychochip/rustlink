@@ -305,6 +305,7 @@ dependencies = [
 name = "rustlink-bench"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustlink",
  "rustlink-collections",
  "zerocopy",

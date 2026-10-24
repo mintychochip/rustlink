@@ -1,4 +1,6 @@
-//! Process-level measurements read from `/proc`.
+//! Process-level measurements from `/proc` and the CPU clock.
+
+#![allow(unsafe_code)]
 
 use std::fs;
 use std::io;
@@ -58,10 +60,21 @@ pub fn parse_schedstat_ns(text: &str) -> Option<u64> {
     text.split_whitespace().next()?.parse().ok()
 }
 
-/// Nanoseconds this thread has spent running on a CPU, from `/proc/thread-self/schedstat`.
+/// Nanoseconds this thread has spent running on a CPU.
 ///
-/// `None` if the file is unavailable (non-Linux).
+/// Uses `CLOCK_THREAD_CPUTIME_ID`, which has nanosecond resolution on Linux; falls back to the
+/// coarser `/proc/thread-self/schedstat` if the clock fails. `None` when neither is available.
 pub fn thread_cpu_ns() -> Option<u64> {
+    let mut timespec = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `timespec` is a valid, writable `libc::timespec`, and the thread CPU clock takes
+    // no other arguments.
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut timespec) };
+    if result == 0 {
+        return Some(timespec.tv_sec as u64 * 1_000_000_000 + timespec.tv_nsec as u64);
+    }
     parse_schedstat_ns(&fs::read_to_string("/proc/thread-self/schedstat").ok()?)
 }
 
@@ -108,6 +121,17 @@ mod tests {
     fn the_live_process_has_a_nonzero_peak_rss() {
         let stats = read_self().unwrap();
         assert!(stats.peak_rss_kib > 0);
+    }
+
+    #[test]
+    fn the_thread_clock_advances_during_work() {
+        let start = thread_cpu_ns().expect("a CPU clock is available");
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(2);
+        while std::time::Instant::now() < until {
+            std::hint::black_box(0u64.wrapping_add(1));
+        }
+        let end = thread_cpu_ns().expect("a CPU clock is available");
+        assert!(end > start, "CPU time did not advance: {start} -> {end}");
     }
 
     #[test]
