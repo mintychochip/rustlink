@@ -116,7 +116,8 @@ fn build_std_btree(keys: &[u32]) -> StdBTreeMap<u32, u64> {
 }
 
 fn build_rust_btree<W: Width>(keys: &[u32]) -> BTreeMap<u32, u64, W> {
-    let mut map = BTreeMap::with_capacity(keys.len());
+    // std's BTreeMap has no `with_capacity` either, so both grow from empty.
+    let mut map = BTreeMap::new();
     for &key in keys {
         map.insert(key, value(key));
     }
@@ -148,7 +149,8 @@ fn build_std_list(n: usize) -> StdList<u64> {
 }
 
 fn build_rust_list<W: Width>(n: usize) -> LinkedList<u64, W> {
-    let mut list = LinkedList::with_capacity(n);
+    // std's LinkedList has no bulk reservation either.
+    let mut list = LinkedList::new();
     for value in 0..n as u64 {
         list.push_back(value);
     }

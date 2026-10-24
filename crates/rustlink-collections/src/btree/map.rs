@@ -178,7 +178,16 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
     }
 
     fn alloc_inner(&mut self, keys: Vec<K>, kids: Vec<Link<K, V, W>>) -> Link<K, V, W> {
-        self.alloc(Node::Inner(Inner { keys, kids }))
+        // Inner nodes split after one insert past capacity, so reserving the exact maximum
+        // avoids a doubling that would leave every split half with twice the room it can use.
+        let mut exact_keys = Vec::with_capacity(INNER_CAP + 1);
+        exact_keys.extend(keys);
+        let mut exact_kids = Vec::with_capacity(INNER_CAP + 2);
+        exact_kids.extend(kids);
+        self.alloc(Node::Inner(Inner {
+            keys: exact_keys,
+            kids: exact_kids,
+        }))
     }
 
     /// The entry for `key`.
