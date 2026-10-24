@@ -27,9 +27,12 @@ Machine and settings
                report renderer (17589d9) and in that layout (188c47a). The git revision in the
                report header is the checkout the report was last rendered from, not the revision of
                the binaries that measured.
-  Matrix       The default matrix: 405 cells, seed 1, 6 repetitions per cell (1 discarded warm-up and
-               5 measured, inside one fresh process). No cell was skipped for memory; 14 were skipped
-               for another reason ("Skipped cells").
+  Matrix       The nine workloads that made up the whole matrix then (bst-random, bst-bulk, ast, ast-bytes,
+               graph-csr, graph-linked-seq, graph-linked-shuf, blob-load, blob-lookup): 405 cells, seed 1,
+               6 repetitions per cell (1 discarded warm-up and 5 measured, inside one fresh process). No
+               cell was skipped for memory; 14 were skipped for another reason ("Skipped cells"). The node
+               graphs and B-trees added later are registered too, so a plain `sweep` now runs 769 cells;
+               their record is bench/decisive/.
 
 Why six sweeps
   The machine is a desktop shared with other sessions that build and test in parallel (load average
@@ -157,6 +160,8 @@ Skipped cells: `box` in graph-linked-seq and graph-linked-shuf (14 cells)
 
 Reproduce
   cargo build --release --bins && target/release/sweep --out my.jsonl --md my.md   (keep the machine idle)
+  That runs all 769 cells of today's registry. For this record's nine workloads alone add
+  --workloads bst-random,bst-bulk,ast,ast-bytes,graph-csr,graph-linked-seq,graph-linked-shuf,blob-load,blob-lookup
   Check the load the way this record did: sample /proc/stat (busy jiffies of every CPU except the
   pinned one) and /proc/schedstat (the pinned CPU's rq_run_delay) while it runs. If the machine cannot
   be idle, repeat sweeps and keep the least disturbed measurement per cell, and measure a reference

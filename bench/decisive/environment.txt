@@ -59,7 +59,10 @@ Why 37 replicates, and how they are judged
   readings. A sweep is "calm" when its inflation is below 1.5. The tables in the README and the
   statistics columns headed calm use the calm sweeps: 91 of 222 (ngraph-mesh 16, -banded 15, -random 16,
   -chase 14, btree-64 15, btree-256 15). Calm sweeps still read 1.17 to 1.49 times the quiet values
-  (median 1.37): the machine was never quiet.
+  (median 1.37): the machine was never quiet. The limit of 1.5 was fixed after the per-sweep inflations
+  and a first table of ratios by inflation band (24 replicates) had been seen, so that every workload
+  keeps at least 14 calm sweeps; it is the same for every cell and variant, and the next-but-one section
+  shows the headline ratios under other limits.
 
   replicates  window (2026-10-23)  calm sweeps  how they ran
   1-11        14:11-14:38          33 of 66      one replicate after another
@@ -113,14 +116,24 @@ What the load does to the ratios
     btree-256     2^22  abs32 / u32         P7            1.21           1.09           1.05           1.05
     btree-64      2^20  std / u32           P8            1.75           1.69           1.64           1.43
     btree-256     2^20  std / u32           P8            2.18           2.21           2.19           2.17
-  Most ratios do not move with the load: the banded `rel16` advantage (0.78 to 0.85 in every band),
-  the mesh `rel16` and `rc` penalties, the B-tree ratios at 2^18 and below. The ones that do are the
-  dependent chases at 2^20 and the B-trees at 2^22, where one variant's data fits the shared L3 and
-  another's does not: more load pushes both into DRAM and their ratio toward 1. The chase ratios at
-  2^20 against inflation (all 37 sweeps, Spearman -0.46 for usize/u32, -0.69 for rc/u32) extrapolate
-  linearly to 1.31 and 1.41 at inflation 1.0. That is an extrapolation and was not measured: the
-  record's 1.22 and 1.29 are probably conservative, and neither reaches the 2.0 that P2 predicted for
-  rc.
+  What holds still and what moves (max / min of a ratio over the four columns, from the table above and
+  from the same computation for other cells). Ratios between variants of similar node size away from a
+  cache boundary hold still: banded `rel16` / `u32` is 0.78 to 0.85 in every band, mesh `rel16` / `u32`
+  at 2^16 is 2.16 to 2.17, and the B-tree ratios at 2^16 and 2^18 agree within 2% in the bands <1.3,
+  <1.5 and all 37 (the heaviest band reads 6% to 10% lower for `usize`, `abs32` and `BTreeSet`). Ratios
+  against a larger footprint, and cells near a cache boundary, move with the load: mesh `rc` / `u32` at
+  2^16 is 1.91 to 1.95 until the heaviest band (3.04); mesh `abs32` / `u32` at 2^22 falls from 2.16 to
+  1.49; the chases at 2^20 fall toward 1 (`rc` 1.51 to 1.09, `usize` 1.45 to 1.07) and at 2^18 rise
+  (`usize` 1.98 to 3.60); btree-256 `u32` / `usize` at 2^22 goes from 0.79 to 0.98. The likely reason
+  (not measured) is the shared L3: under load a footprint that fitted it spills to DRAM, which pulls
+  the 2^20 and 2^22 ratios toward 1, and the larger footprint at 2^18 suffers more. Verdicts by band:
+  the falsifications of P3 and P8 hold in every band shown, except btree-64 `std` at 2^20 in the
+  heaviest band (1.43, inside P8's 1.5); P2 on the random graph holds in every band; P2 on the chase
+  (1.09 to 1.51), P4 (1.07 to 1.45) and P6's 256-byte bound at 2^22 (0.79 to 0.98) cross their
+  thresholds depending on the band. The chase ratios at 2^20 against inflation (all 37 sweeps,
+  Spearman -0.46 for usize/u32, -0.69 for rc/u32) extrapolate linearly to 1.31 and 1.41 at
+  inflation 1.0. That is an extrapolation and was not measured: the record's 1.22 and 1.29 are
+  probably conservative, and neither reaches the 2.0 that P2 predicted for rc.
 
 How far the calm sweeps agree (per done cell; K = 14 to 16 sweeps)
     size                                          2^10   2^12   2^14   2^16   2^18   2^20   2^22
