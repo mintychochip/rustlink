@@ -1,0 +1,115 @@
+rustlink benchmark record: dynamic containers
+==============================================
+
+The seven container workloads of `crates/rustlink-bench/src/containers.rs` (btree-lookup,
+btree-scan, btree-churn, hash-lookup, hash-scan, hash-churn, list-scan), measured on 2026-10-23
+after the two rustlink records. They compare `rustlink-collections` with the standard library's
+`BTreeMap`, `HashMap` and `LinkedList`; unlike the packed B-trees of the second record, every
+container here supports insertion and removal.
+
+Files
+  results.jsonl    One row per cell (144): 129 done, 15 skipped. Each row is the per-field median of
+                   the 14 sweeps of replicates/, not a verbatim `sweep` line. Registry order.
+  results.md       The report, rendered from results.jsonl with `sweep --report-only`. Its header's
+                   git revision is the checkout the renderer ran in (c8a68c2), which is the code the
+                   measurement binaries were built from. MemAvailable is the value when the report
+                   was rendered.
+  ratios.tsv       Paired ratios, variant / reference within one sweep: every sweep's value and the
+                   median over the 14. References are std, and `std-fnv` for the hash map. Metrics
+                   are traverse CPU, build CPU and heap.
+  replicates/      The 14 complete sweeps, run1.jsonl to run14.jsonl, in the order they ran.
+
+Machine and settings
+  CPU          Intel Core Ultra 7 270K Plus, 24 CPUs, no SMT; every cell pinned to cpu23 with
+               taskset. cpu23 is an E-core: L1d 32 KiB, L2 4 MiB, L3 36 MiB shared, maximum
+               frequency 4.7 GHz. Kernel 7.1.10-200.fc44.x86_64, rustc 1.99.0-nightly from
+               6f72b5dd5, release profile (opt-level 3, fat LTO). The governor is powersave; the
+               core read 4.70 GHz during the runs.
+  Binaries     `sweep` and `rlb` built from c8a68c2; no rebuild during the measurements.
+  Matrix       144 cells: btree-lookup, btree-scan and btree-churn accept std, u16 and u32;
+               the three hash workloads accept std, std-fnv, u16 and u32; list-scan accepts std,
+               u16 and u32. Sizes 2^10, 2^12, 2^14, 2^16, 2^18 and 2^20 entries; seed 1; 6
+               repetitions per cell (1 discarded warm-up and 5 measured, in one fresh process).
+               Each cell has a 300 s budget; none came close.
+  Units        lookup, visit and op. Heap is live requested bytes per entry after the build, from
+               the crate's counting allocator; it includes Vec capacity but not allocator
+               metadata. Peak RSS is the process maximum and includes growth transients, so do
+               not read it as steady-state memory.
+
+  Build and traversal CPU times come from CLOCK_THREAD_CPUTIME_ID, read around each phase of
+  every measured repetition; wall time is measured with Instant around the same phases. The
+  report prints both. The ratios here use CPU time: it excludes time the thread was descheduled,
+  which is the right measure when other processes share the machine. Wall / CPU over all done
+  cells had median 0.998 and 90th percentile 1.003, so preemption on cpu23 was negligible.
+
+Containers and what the variants mean
+  std      std::collections::{BTreeMap, HashMap, LinkedList}, default hasher (SipHash) for HashMap.
+  std-fnv  std::collections::HashMap with rustlink-collections' FNV-1a BuildHasher, so the hash
+           function is the same as the u16/u32 variants.
+  u16/u32  rustlink_collections::BTreeMap/HashMap/LinkedList with 16- or 32-bit OptAbs links.
+           The number bounds nodes or entry slots, not necessarily entries: a B+tree's links
+           address nodes (about one per eleven entries at this fill), a hash map's and list's
+           address one slot per entry.
+
+Replicates and merge
+  The machine is shared, so one sweep is not enough. Fourteen complete sweeps ran back to back
+  (roughly 20 s each late in the run; about 5 min in total). A cell's absolute value in results.jsonl
+  is the median of its 14 measurements. A ratio is taken inside each sweep, where both variants
+  ran seconds apart under the same load, and reported as the median of the 14 ratios; the IQR in
+  ratios.tsv shows the spread. The report's MAD is within one repetition, not between sweeps.
+
+  Load: uptime read 4.4 to 8.3 (1-minute) during the set; other CPUs were 12% to 31% busy on
+  average, and cpu23 itself 12% to 30% at the start. There was no calm-window gate. That is why
+  the 2^20 ratios below have wide interquartile ranges and are labelled as such. The earlier
+  7-sweep set on cpu3 (a P-core, then 90% busy) was discarded.
+
+Spread of the ratios that the README quotes (median over 14, interquartile range)
+  btree-lookup 2^14   u32 / std           traverse 0.87 (0.86-0.87)
+  btree-lookup 2^16   u32 / std           traverse 0.96 (0.94-0.98)
+  btree-lookup 2^18   u32 / std           traverse 1.06 (1.01-1.16)
+  btree-lookup 2^20   u32 / std           traverse 1.23 (1.03-1.30)
+  btree-churn  2^20   u32 / std           traverse 1.75 (1.62-1.88)
+  hash-lookup  2^14   u32 / std-fnv       traverse 0.96 (0.94-0.97)
+  hash-lookup  2^20   u32 / std-fnv       traverse 1.07 (1.04-1.12)
+  hash-scan    2^20   u32 / std-fnv       traverse 0.28 (0.27-0.30)
+  hash-churn   2^20   u32 / std-fnv       traverse 0.67 (0.59-0.71)
+  list-scan    2^14   u32 / std           traverse 1.58 (1.58-1.58)
+  list-scan    2^18   u32 / std           traverse 0.49 (0.46-0.64)
+  list-scan    2^20   u32 / std           traverse 0.96 (0.85-1.08)
+
+  Absolute 2^20 traversal CPU time, median (IQR) over the 14 sweeps, ns per unit:
+    btree-lookup std 156.4 (146.1-172.3), u32 186.5 (171.4-196.2)
+    btree-churn  std 219.8 (206.9-240.4), u32 382.3 (358.4-427.2)
+    hash-lookup  std 34.2 (31.7-34.5),    u32 16.5 (16.2-17.8)
+    hash-scan    std 2.8 (2.7-3.0),       u32 0.8 (0.8-0.8)
+    hash-churn   std 33.7 (31.9-35.3),    u32 13.0 (12.7-13.5)
+    list-scan    std 1.8 (1.7-1.9),       u32 1.8 (1.6-1.9)
+
+Skipped cells (15, deterministic)
+  A u16 B+tree addresses at most 65,535 nodes, which is about 65,000 entries at the fill this
+  workload reaches, so btree-lookup, btree-scan and btree-churn skip only 2^20. A u16 hash map
+  and list address one entry slot per element, so their u16 cells are skipped at 2^16, 2^18 and
+  2^20. No cell failed.
+
+Limits of this record
+  * One machine, one pinned E-core, one seed, and a shared machine that was never quiet. Read the
+    ratios, not differences between cells of results.md; the 2^20 ratios in particular have
+    interquartile ranges that span 25% or more.
+  * Heap bytes are requested capacity, not allocator overhead. The B+tree's node Vec and each
+    node's key/entry Vec grow geometrically, so some memory is spare capacity; std's BTreeMap
+    allocates its nodes at fixed size, which is a real part of its advantage in this record.
+  * The hash map's default FNV hasher is not collision-resistant. `std-fnv` isolates the hash
+    function; both std and rustlink hash maps use the same 3/4 load factor for open-ended growth,
+    but std's hashbrown probes while this map chains.
+  * No hardware counters were available, so cache explanations are inferences from footprint
+    sizes (a 2^20 B+tree is about 29 MB, std's about 21 MB; a 2^20 list is 16 MB against 24 MB).
+
+Reproduce
+  cargo build --release --bins
+  target/release/sweep \
+      --workloads btree-lookup,btree-scan,btree-churn,hash-lookup,hash-scan,hash-churn,list-scan \
+      --sizes 10,12,14,16,18,20 --reps 6 --cpu 23 \
+      --out my-run1.jsonl --md my-run1.md
+  Repeat, keep every run separate, and take the median of each cell's measurements and the median
+  of the per-sweep ratios. `sweep --report-only --out merged.jsonl --md merged.md` renders one
+  merged file.

@@ -19,6 +19,9 @@ measures where narrow links pay.
 * A frozen, position-independent blob: `Arena::freeze` writes a header plus the raw elements, and
   `BlobRef::verify` checks the header, the exact length, the element size, a schema id and every
   link before returning a zero-copy view.
+* `rustlink-collections`: `LinkedList`, `BTreeMap`/`BTreeSet` and `HashMap`/`HashSet` whose nodes
+  live in a `Vec` and point at each other with `OptAbs` links of a width you choose. All are
+  `#![no_std]` with `alloc` and contain no `unsafe`.
 * No `unsafe` code, `#![no_std]` with `alloc`, no feature flags.
 
 ## Reach
@@ -145,11 +148,80 @@ Time relative to hand-written `u32` indices; below 1 is faster, `n/a` means the 
 * **A dependent chase separates the variants where their footprints straddle a cache level, and not in DRAM.** At 2^18 the chase takes 3.6x (`Rc`) and 2.3x (`usize`) the `u32` time, at 2^20 1.3x and 1.2x, and at 2^22 1.07x and 1.04x. The 2^20 ratios fall as the machine gets busier (1.09x and 1.07x on the 17 sweeps whose reference cells read at least twice their quiet values), so a quiet machine probably reads higher; that was not measured.
 * **In a B-tree link width barely matters.** `u32` is 8% to 17% faster than `usize` indices (0.83x to 0.92x of the time) and 2% to 9% smaller; `abs32` is as fast as `u32` within 9% (0.94x to 1.09x) and 1% to 3% smaller; `abs16` saves 2% to 6% more up to its reach, at 0.97x to 1.07x the time. The packed trees beat `BTreeSet` by 1.6x to 2.3x in lookup time and 1.2x to 1.4x in memory per key, but `BTreeSet` is a dynamic structure, and these trees cannot be modified.
 
+### Dynamic containers
+
+A third record, `bench/containers/`, measures the `rustlink-collections` types against the
+standard library's dynamic containers: `BTreeMap`/`BTreeSet`, `HashMap`/`HashSet` and
+`LinkedList`, with insertion and removal, not the packed static trees of the previous section.
+Seven workloads build a structure and then look up, scan or churn (remove half the keys and put
+them back). The variants are `std`, `std-fnv` (std's `HashMap` with the same FNV-1a hasher as the
+rustlink map), `u16` and `u32`; the number is the link width. Sizes run from 2^10 to 2^20 entries.
+
+Heap bytes are requested bytes per entry after the build; times are per lookup, visit or operation
+from `CLOCK_THREAD_CPUTIME_ID`. Each figure is the median of 14 complete sweeps on one pinned
+E-core (cpu23, L1d 32 KiB, L2 4 MiB, L3 36 MiB), with paired ratios taken inside each sweep. The
+machine was shared and never quiet, so ratios below 1 mean rustlink is faster and cells at 2^20
+carry the widest uncertainty; `bench/containers/environment.txt` gives the interquartile ranges,
+the load and the merge rule. Absolute times are not comparable with the earlier records, which
+ran on a P-core.
+
+| Heap bytes per entry at 2^20 | `std` | `u32` links | `u16` links |
+|---|---:|---:|---:|
+| `BTreeMap<u32, u64>` | 20.7 | 29.2 | 29.0 (2^18) |
+| `HashMap<u32, u64>` | 34.0 | 25.0 | 21.0 (2^14) |
+| `LinkedList<u64>` | 24.0 | 16.0 | 16.0 (2^14) |
+
+The `u16` column is shown at the largest size it can address: a B+tree's links address nodes
+(about 65,000 entries at this fill), while a hash map's and a list's address one slot per entry
+(65,535). `std-fnv` uses the same hasher and has the same 34.0 bytes per entry as `std`.
+
+Time relative to `std`; below 1 is faster. The hash rows use `std-fnv` as the baseline, so the hash
+function cancels and the comparison is the container layout. CPU time, median of 14 per-sweep
+ratios.
+
+| Workload / `std` | 2^14 | 2^16 | 2^18 | 2^20 |
+|---|---:|---:|---:|---:|
+| `btree-lookup`, `u32` | 0.87 | 0.96 | 1.06 | 1.23 (IQR 1.03-1.30) |
+| `btree-scan`, `u32` | 0.98 | 1.00 | 1.29 | 0.95 |
+| `btree-churn`, `u32` | 1.10 | 1.24 | 1.36 | 1.75 (IQR 1.62-1.88) |
+| `hash-lookup`, `u32` / `std-fnv` | 0.96 | 1.00 | 1.28 | 1.07 |
+| `hash-scan`, `u32` / `std-fnv` | 0.44 | 0.36 | 0.34 | 0.28 |
+| `hash-churn`, `u32` / `std-fnv` | 0.96 | 0.91 | 1.38 | 0.67 |
+| `list-scan`, `u32` | 1.58 | 1.37 | 0.49 | 0.96 |
+
+* **A dynamic B+tree does not save memory when values are large; the arena overhead is larger than
+  the links it replaces.** The tree takes 29.2 bytes per `u32` key and `u64` value against 20.7
+  for `std::collections::BTreeMap`, and 16-bit links save only 0.2 bytes because the links are a
+  small part of each entry. A leaf stores its entries in a `Vec` with its full 16-entry capacity,
+  each node is a 48-byte enum slot, and the node arena grows geometrically; std's B+tree allocates
+  fixed-size nodes and packs them more tightly. The same implementation is, however, faster than
+  std while it fits in cache: lookups take 0.87x std's time at 2^14 and 0.96x at 2^16, tie at
+  2^18, and 1.23x at 2^20. Builds cost 1.18x to 1.73x and churn 1.10x to 1.75x. Scans are a tie
+  within 0.95x to 1.29x.
+* **The hash map is the memory winner and its scan is three times faster.** 25 bytes per entry
+  against 34, or 21 with 16-bit links, because entries are a flat `Vec` and buckets are 16-bit
+  indices. Scanning visits a contiguous slot array: 0.28x to 0.44x of std's time with the same
+  hasher, and 0.29x against std's default SipHash. Churn is 0.67x to 1.38x and lookup 0.96x to
+  1.28x with the same hasher, so the container's routing is not faster than hashbrown's; the
+  0.50x to 0.71x win against std's default map is mostly FNV against SipHash.
+* **The linked list halves the memory and its build is ten times faster; its scan depends on
+  cache.** 16 bytes per node against 24, and `push_back` into one `Vec` costs 0.09x to 0.10x of
+  std's one-allocation-per-node build. At 2^14 and 2^16, where both lists fit in L2, link decoding
+  makes the scan 1.4x to 1.6x slower. At 2^18 the contiguous 4 MiB array beats pointer chasing
+  (0.49x), and at 2^20 the two are within noise (0.96x, IQR 0.85-1.08) while the memory saving
+  remains.
+* **Width matters less than expected.** A 16-bit B+tree saves 0.2 bytes per entry and a 16-bit list
+  saves nothing (`u64` plus two `u16` links pads to the same 16 bytes as two `u32` links); the
+  16-bit hash map saves 4 bytes per entry but cannot hold more than 65,535 entries. The 16-bit
+  B+tree is 0.99x to 1.06x the `u32` time, the 16-bit hash map 0.69x to 1.00x, and the 16-bit list
+  1.12x to 1.14x, so the width is not a reliable time lever after it fits.
+
 ## Benchmarks
 
-The `rustlink-bench` crate compares pointers, `Rc` nodes, `std::collections::BTreeSet`, hand-written
-`usize` and `u32` indices, and every rustlink width and link form on trees, an expression tree,
-graphs, link-dense node graphs, B-trees and blobs.
+The `rustlink-bench` crate compares pointers, `Rc` nodes, `std::collections::BTreeSet`,
+hand-written `usize` and `u32` indices, every rustlink width and link form on trees, an expression
+tree, graphs, link-dense node graphs, B-trees and blobs, and `rustlink-collections` against
+`std::collections` on linked lists, ordered maps and hash maps.
 
 ```text
 cargo build --release --bins
@@ -159,9 +231,11 @@ target/release/sweep --report-only               # re-render bench/results.md fr
 target/release/rlb list                          # workloads, their largest size and variants
 target/release/sweep --workloads ngraph-mesh,ngraph-banded,ngraph-random,ngraph-chase,btree-64,btree-256 \
     --out my-decisive.jsonl --md my-decisive.md  # the node graphs and B-trees alone
+target/release/sweep --workloads btree-lookup,btree-scan,btree-churn,hash-lookup,hash-scan,hash-churn,list-scan \
+    --sizes 10,12,14,16,18,20 --out my-containers.jsonl --md my-containers.md
 ```
 
-`bench/results.md` is the first recorded sweep (the nine original workloads, 405 cells: the trees, the expression tree, the graphs and the blobs), and `bench/environment.txt` says how it was taken. `bench/decisive/` records the node graphs and B-trees (364 cells), which were measured in repeated sweeps and judged on ratios (`bench/decisive/environment.txt`). All 15 workloads are registered, so a plain `sweep` runs 769 cells; without `--out` and `--md` it appends them to the first record's `bench/results.jsonl` and rewrites `bench/results.md`, whose report keeps the last measurement of every cell. Pass `--out` and `--md` for your own runs, and `--workloads` to pick a record's workloads.
+`bench/results.md` is the first recorded sweep (the nine original workloads, 405 cells: the trees, the expression tree, the graphs and the blobs), and `bench/environment.txt` says how it was taken. `bench/decisive/` records the node graphs and B-trees (364 cells), which were measured in repeated sweeps and judged on ratios (`bench/decisive/environment.txt`). `bench/containers/` records the seven dynamic-container workloads (144 cells, 129 done and 15 skipped for width), with 14 complete sweeps, a merged results file, every replicate and a ratios table (`bench/containers/environment.txt`). All 22 workloads are registered, so a plain `sweep` runs 913 cells; without `--out` and `--md` it appends them to the first record's `bench/results.jsonl` and rewrites `bench/results.md`, whose report keeps the last measurement of every cell. Pass `--out` and `--md` for your own runs, and `--workloads` to pick a record's workloads.
 
 Each cell runs in its own process pinned to one CPU with `taskset`, so peak RSS is clean. Leave
 the machine idle while a sweep runs, and check that it is first: `uptime` should show a load
@@ -171,10 +245,11 @@ idle one if that core is busy.
 
 ### Reading the numbers
 
-* Heap bytes per node are *requested* bytes, so allocator overhead is excluded; peak RSS includes it.
+* Heap bytes per node are *requested* bytes, so allocator overhead is excluded; peak RSS includes it. For the container workloads the unit is one entry, not one node, and `std`'s containers report a node size of 0 because their internal layouts are private.
 * Build times of the `Vec` and `Arena` variants include first-touch page faults of freshly allocated memory, while the `box` variants may reuse memory freed by earlier repetitions, so build times can favour `box` slightly. The `box` build in `graph-linked-*` allocates every edge in slot order and then walks the edge plan to link the chains (shuffled in `graph-linked-shuf`), so do not read that build time as an allocation cost.
 * The narrow variants traverse through `Cursor`, which carries a slice and an index, while the hand-written baselines pass a single index. A gap between `u32` and `abs32` is therefore the cost of the bounds-checked API, not of the link width.
-* A cell marked `n/a` is not a failure: that variant's links cannot represent the structure at that size. `rel*` links need every link distance to fit the width, and `abs16` fits at most 65,535 elements (an `OptAbs` reserves one value for null); the report's notes give the measured link distances for every `n/a` cell. A cell marked `skip` was not measured, and its note says why (the `box` cells of `graph-linked-seq` and `graph-linked-shuf`, see the note under the table above).
+* A cell marked `n/a` is not a failure: that variant's links cannot represent the structure at that size. `rel*` links need every link distance to fit the width, and `abs16` fits at most 65,535 elements (an `OptAbs` reserves one value for null); the report's notes give the measured link distances for every `n/a` cell. A cell marked `skip` was not measured, and its note says why (the `box` cells of `graph-linked-seq` and `graph-linked-shuf`, or a 16-bit container at a size its links cannot address).
 * The `±` is the MAD of five repetitions in one process. It leaves out the variation between processes (page layout) and between times, which is larger: the usable measurements of one cell typically differ by 2% to 4% from 2^14 to 2^24 nodes, but by 8% (median) and 17% (90th percentile) at 2^20, and by up to 28% for single cells (`bench/environment.txt`). Treat differences under 10% as ties, differences under 20% at 2^20 as unresolved, and cells up to 2^12 nodes, which take microseconds per repetition, as indicative only. A cell is the fastest of its usable measurements, which averages 2% (4% at 2^20) below their median.
 * Background load matters: cells of 2^18 nodes and more ran about 3% slower with two other CPUs busy and about 12% slower with four to six busy, and 2^20 about twice as much. The count of busy CPUs is only a proxy: the same count cost far more later on 2026-10-23, when other sessions loaded the memory system (`bench/environment.txt`). Measure a reference cell, such as `u32` of the same workload and size, next to anything you want to trust.
+* The CPU tables read `CLOCK_THREAD_CPUTIME_ID` around each build and traversal. They exclude time the process was descheduled, so use them when other work shares the machine; the wall table is the same work measured with `Instant`.
 * One machine, one pinned core.
