@@ -23,9 +23,11 @@ struct Node<T, W: Width> {
 /// Compared with `std::collections::LinkedList`, a node takes `size_of::<T>()` plus two links
 /// (4 + 8 = 12 bytes for a `u32` element and `u32` links, against 24 plus allocator overhead),
 /// pushing never allocates a node, and the nodes of a list built by `push_back` are contiguous.
+/// While storage order equals list order, [`iter`](Self::iter) and [`into_iter`](IntoIterator)
+/// walk the slice directly instead of decoding links ([`is_contiguous`](Self::is_contiguous)).
 /// Nodes are kept dense: removing one moves the last-stored node into its slot, so storage order
-/// is not list order and there is no way to hand out `&mut` references in list order without
-/// `unsafe`. Use [`for_each_mut`](Self::for_each_mut) or the ends instead of `iter_mut`.
+/// is not always list order and there is no way to hand out `&mut` references in list order
+/// without `unsafe`. Use [`for_each_mut`](Self::for_each_mut) or the ends instead of `iter_mut`.
 ///
 /// `append` and `split_off` cost O(n) rather than O(1), because nodes must move between `Vec`s.
 ///
@@ -46,6 +48,8 @@ pub struct LinkedList<T, W: Width = u32> {
     nodes: Vec<Node<T, W>>,
     head: Link<T, W>,
     tail: Link<T, W>,
+    /// True while storage order is list order, which lets iteration walk the slice directly.
+    contiguous: bool,
 }
 
 impl<T, W: Width> LinkedList<T, W> {
@@ -55,6 +59,7 @@ impl<T, W: Width> LinkedList<T, W> {
             nodes: Vec::new(),
             head: OptAbs::NULL,
             tail: OptAbs::NULL,
+            contiguous: true,
         }
     }
 
@@ -86,6 +91,14 @@ impl<T, W: Width> LinkedList<T, W> {
         self.nodes.clear();
         self.head = OptAbs::NULL;
         self.tail = OptAbs::NULL;
+        self.contiguous = true;
+    }
+
+    /// True while the nodes are stored in list order, so [`iter`](Self::iter) can walk the slice
+    /// directly instead of following links. `push_back` and `pop_back` preserve it; `push_front`,
+    /// removing from the middle and appending a list that is not contiguous clear it.
+    pub fn is_contiguous(&self) -> bool {
+        self.contiguous
     }
 
     /// The first element.
@@ -117,11 +130,15 @@ impl<T, W: Width> LinkedList<T, W> {
         let Ok(link) = OptAbs::new(Some(self.nodes.len())) else {
             return Err(Full(value));
         };
+        let was_empty = self.nodes.is_empty();
         self.nodes.push(Node {
             value,
             prev: self.tail,
             next: OptAbs::NULL,
         });
+        if was_empty {
+            self.contiguous = true;
+        }
         match self.tail.get() {
             Some(tail) => self.nodes[tail].next = link,
             None => self.head = link,
@@ -135,11 +152,13 @@ impl<T, W: Width> LinkedList<T, W> {
         let Ok(link) = OptAbs::new(Some(self.nodes.len())) else {
             return Err(Full(value));
         };
+        let was_empty = self.nodes.is_empty();
         self.nodes.push(Node {
             value,
             prev: OptAbs::NULL,
             next: self.head,
         });
+        self.contiguous = was_empty;
         match self.head.get() {
             Some(head) => self.nodes[head].prev = link,
             None => self.tail = link,
@@ -193,6 +212,11 @@ impl<T, W: Width> LinkedList<T, W> {
 
         let last = self.nodes.len() - 1;
         let removed = self.nodes.swap_remove(index);
+        if self.nodes.is_empty() {
+            self.contiguous = true;
+        } else if self.contiguous && index != last {
+            self.contiguous = false;
+        }
         if index != last {
             // The node that was stored last now lives at `index`; whoever pointed at `last` must
             // point at `index` instead.
@@ -218,6 +242,7 @@ impl<T, W: Width> LinkedList<T, W> {
         if other.is_empty() {
             return Ok(());
         }
+        let contiguous = self.contiguous && other.contiguous;
         let offset = self.nodes.len();
         if offset + other.nodes.len() > node_limit::<W>() {
             return Err(Full(()));
@@ -234,6 +259,8 @@ impl<T, W: Width> LinkedList<T, W> {
         }
         other.head = OptAbs::NULL;
         other.tail = OptAbs::NULL;
+        self.contiguous = contiguous;
+        other.contiguous = true;
 
         match self.tail.get() {
             Some(tail) => {
@@ -295,10 +322,17 @@ impl<T, W: Width> LinkedList<T, W> {
 
     /// An iterator over the elements, front to back.
     pub fn iter(&self) -> Iter<'_, T, W> {
+        let inner = if self.contiguous {
+            Inner::Slice(self.nodes.iter())
+        } else {
+            Inner::Links {
+                nodes: &self.nodes,
+                front: self.head,
+                back: self.tail,
+            }
+        };
         Iter {
-            nodes: &self.nodes,
-            front: self.head,
-            back: self.tail,
+            inner,
             remaining: self.nodes.len(),
         }
     }
@@ -370,15 +404,32 @@ impl<T, W: Width> FromIterator<T> for LinkedList<T, W> {
 
 /// An iterator over the elements of a [`LinkedList`], created by [`LinkedList::iter`].
 pub struct Iter<'a, T, W: Width> {
-    nodes: &'a [Node<T, W>],
-    front: Link<T, W>,
-    back: Link<T, W>,
+    inner: Inner<'a, T, W>,
     remaining: usize,
+}
+
+enum Inner<'a, T, W: Width> {
+    Slice(core::slice::Iter<'a, Node<T, W>>),
+    Links {
+        nodes: &'a [Node<T, W>],
+        front: Link<T, W>,
+        back: Link<T, W>,
+    },
 }
 
 impl<T, W: Width> Clone for Iter<'_, T, W> {
     fn clone(&self) -> Self {
-        Iter { ..*self }
+        Iter {
+            inner: match &self.inner {
+                Inner::Slice(iter) => Inner::Slice(iter.clone()),
+                Inner::Links { nodes, front, back } => Inner::Links {
+                    nodes,
+                    front: *front,
+                    back: *back,
+                },
+            },
+            remaining: self.remaining,
+        }
     }
 }
 
@@ -389,10 +440,19 @@ impl<'a, T, W: Width> Iterator for Iter<'a, T, W> {
         if self.remaining == 0 {
             return None;
         }
-        let node = &self.nodes[self.front.get()?];
-        self.front = node.next;
         self.remaining -= 1;
-        Some(&node.value)
+        match &mut self.inner {
+            Inner::Slice(iter) => iter.next().map(|node| &node.value),
+            Inner::Links {
+                nodes,
+                front,
+                back: _,
+            } => {
+                let node = &nodes[front.get()?];
+                *front = node.next;
+                Some(&node.value)
+            }
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -405,10 +465,19 @@ impl<'a, T, W: Width> DoubleEndedIterator for Iter<'a, T, W> {
         if self.remaining == 0 {
             return None;
         }
-        let node = &self.nodes[self.back.get()?];
-        self.back = node.prev;
         self.remaining -= 1;
-        Some(&node.value)
+        match &mut self.inner {
+            Inner::Slice(iter) => iter.next_back().map(|node| &node.value),
+            Inner::Links {
+                nodes,
+                front: _,
+                back,
+            } => {
+                let node = &nodes[back.get()?];
+                *back = node.prev;
+                Some(&node.value)
+            }
+        }
     }
 }
 
@@ -426,24 +495,39 @@ impl<'a, T, W: Width> IntoIterator for &'a LinkedList<T, W> {
 
 /// An owning iterator over the elements of a [`LinkedList`], front to back.
 pub struct IntoIter<T, W: Width> {
-    list: LinkedList<T, W>,
+    inner: IntoInner<T, W>,
+}
+
+enum IntoInner<T, W: Width> {
+    Contiguous(alloc::vec::IntoIter<Node<T, W>>),
+    Links(LinkedList<T, W>),
 }
 
 impl<T, W: Width> Iterator for IntoIter<T, W> {
     type Item = T;
 
     fn next(&mut self) -> Option<T> {
-        self.list.pop_front()
+        match &mut self.inner {
+            IntoInner::Contiguous(iter) => iter.next().map(|node| node.value),
+            IntoInner::Links(list) => list.pop_front(),
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.list.len(), Some(self.list.len()))
+        let len = match &self.inner {
+            IntoInner::Contiguous(iter) => iter.len(),
+            IntoInner::Links(list) => list.len(),
+        };
+        (len, Some(len))
     }
 }
 
 impl<T, W: Width> DoubleEndedIterator for IntoIter<T, W> {
     fn next_back(&mut self) -> Option<T> {
-        self.list.pop_back()
+        match &mut self.inner {
+            IntoInner::Contiguous(iter) => iter.next_back().map(|node| node.value),
+            IntoInner::Links(list) => list.pop_back(),
+        }
     }
 }
 
@@ -455,7 +539,15 @@ impl<T, W: Width> IntoIterator for LinkedList<T, W> {
     type IntoIter = IntoIter<T, W>;
 
     fn into_iter(self) -> IntoIter<T, W> {
-        IntoIter { list: self }
+        if self.contiguous {
+            IntoIter {
+                inner: IntoInner::Contiguous(self.nodes.into_iter()),
+            }
+        } else {
+            IntoIter {
+                inner: IntoInner::Links(self),
+            }
+        }
     }
 }
 
@@ -735,5 +827,68 @@ mod tests {
         });
         assert_eq!(contents(&list), [11, 3, 31]);
         assert_eq!(sum, 45);
+    }
+    #[test]
+    fn contiguity_tracks_storage_order_and_both_iterators_agree() {
+        let mut list: LinkedList<u32, u32> = (0..10).collect();
+        assert!(list.is_contiguous());
+        assert_eq!(
+            list.iter().copied().collect::<Vec<_>>(),
+            (0..10).collect::<Vec<_>>()
+        );
+        list.push_front(99);
+        assert!(!list.is_contiguous());
+        assert_eq!(
+            list.iter().copied().collect::<Vec<_>>(),
+            [99, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        );
+        list.clear();
+        assert!(list.is_contiguous());
+
+        let mut a: LinkedList<u32, u32> = (0..5).collect();
+        let mut b: LinkedList<u32, u32> = (5..10).collect();
+        a.append(&mut b);
+        assert!(a.is_contiguous());
+        assert_eq!(
+            a.iter().copied().collect::<Vec<_>>(),
+            (0..10).collect::<Vec<_>>()
+        );
+        let mut c: LinkedList<u32, u32> = (100..102).collect();
+        c.push_front(99);
+        a.append(&mut c);
+        assert!(!a.is_contiguous());
+        assert_eq!(
+            a.iter().copied().collect::<Vec<_>>(),
+            (0..10).chain([99, 100, 101]).collect::<Vec<_>>()
+        );
+
+        let mut list: LinkedList<u32, u32> = (0..5).collect();
+        assert_eq!(list.pop_back(), Some(4));
+        assert!(list.is_contiguous());
+        assert_eq!(list.pop_front(), Some(0));
+        assert!(!list.is_contiguous());
+        assert_eq!(list.into_iter().collect::<Vec<_>>(), [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_contiguous_owned_iterator_matches_from_both_ends() {
+        let list: LinkedList<u32, u16> = (0..100).collect();
+        let mut iter = list.into_iter();
+        let mut front = Vec::new();
+        let mut back = Vec::new();
+        loop {
+            assert_eq!(iter.len(), 100 - front.len() - back.len());
+            if front.len() + back.len() == 100 {
+                break;
+            }
+            front.push(iter.next().unwrap());
+            if front.len() + back.len() == 100 {
+                break;
+            }
+            back.push(iter.next_back().unwrap());
+        }
+        back.reverse();
+        front.extend(back);
+        assert_eq!(front, (0..100).collect::<Vec<_>>());
     }
 }

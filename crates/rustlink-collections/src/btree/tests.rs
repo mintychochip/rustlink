@@ -412,3 +412,44 @@ fn a_single_entry_tree_is_a_leaf_root() {
     assert!(map.is_empty());
     assert_eq!(map.remove(&1), None);
 }
+
+#[test]
+fn range_matches_std_for_every_bound_shape() {
+    use std::ops::Bound::{Excluded, Included, Unbounded};
+    let map: BTreeMap<u32, u64, u16> = (0..500).map(|k| (k, u64::from(k) * 3)).collect();
+    let model: StdMap<u32, u64> = (0..500).map(|k| (k, u64::from(k) * 3)).collect();
+    let cases = [
+        (Unbounded, Unbounded),
+        (Included(0), Unbounded),
+        (Excluded(0), Unbounded),
+        (Included(100), Included(200)),
+        (Excluded(100), Excluded(200)),
+        (Included(100), Excluded(200)),
+        (Excluded(100), Included(200)),
+        (Included(499), Included(499)),
+        (Excluded(499), Unbounded),
+        (Included(500), Unbounded),
+    ];
+    for (start, end) in cases {
+        let ours: Vec<(u32, u64)> = map.range((start, end)).map(|(k, v)| (*k, *v)).collect();
+        let theirs: Vec<(u32, u64)> = model.range((start, end)).map(|(k, v)| (*k, *v)).collect();
+        assert_eq!(ours, theirs, "{start:?}..{end:?}");
+    }
+}
+
+#[test]
+fn shrink_and_mutable_visit_preserve_the_map() {
+    let mut map: BTreeMap<u32, u64, u16> = (0..2_000).map(|k| (k, u64::from(k))).collect();
+    map.shrink_to_fit();
+    check(&map);
+    for key in [0, 1, 999, 1_999] {
+        assert_eq!(map.get(&key), Some(&u64::from(key)));
+    }
+    map.for_each_mut(|key, value| *value = value.wrapping_add(u64::from(*key)));
+    for key in 0..2_000 {
+        assert_eq!(map.get(&key), Some(&(u64::from(key) * 2)));
+    }
+    map.insert(2_000, 4_000);
+    check(&map);
+    assert_eq!(map.len(), 2_001);
+}

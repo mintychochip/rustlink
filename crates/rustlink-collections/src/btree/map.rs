@@ -6,11 +6,13 @@ use core::borrow::Borrow;
 use core::fmt;
 use core::iter::FusedIterator;
 use core::mem;
+use core::ops::{Bound, RangeBounds};
 
 use rustlink::{OptAbs, Width};
 
 use super::{
-    INNER_CAP, Inner, LEAF_CAP, Leaf, Link, MIN_INNER, MIN_LEAF, Node, Path, child_pos, link,
+    INNER_CAP, Inner, LEAF_CAP, Leaf, Link, MIN_INNER, MIN_LEAF, Node, Path, child_pos,
+    leaf_search, link,
 };
 use crate::error::{Full, MESSAGE};
 use crate::limit::node_limit;
@@ -18,10 +20,11 @@ use crate::limit::node_limit;
 /// A map from keys to values in key order.
 ///
 /// A leaf takes two `Vec`s (keys and values) plus two `W`-byte links; an inner node takes one
-/// `K` per separator plus `W` bytes per child. The tree is a B+tree: every entry is in a leaf, leaves
-/// are chained in key order, and inner nodes only route. Lookups therefore touch fewer bytes per
-/// level than a map that stores values in inner nodes too, and a full scan follows one link per
-/// leaf.
+/// `K` per separator plus `W` bytes per child. Leaves and inner nodes hold up to 128 entries, so a
+/// million entries fit in about three levels. The tree is a B+tree: every entry is in a leaf,
+/// leaves are chained in key order, and inner nodes only route. A full scan follows one link per
+/// leaf; [`range`](Self::range) seeks to its start, [`for_each_mut`](Self::for_each_mut) updates
+/// values in place, and [`shrink_to_fit`](Self::shrink_to_fit) compacts a read-mostly map.
 ///
 /// ```
 /// use rustlink_collections::BTreeMap;
@@ -291,7 +294,7 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
                     index = inner.kids[at].get().expect("a child link is live");
                 }
                 Node::Leaf(leaf) => {
-                    if let Ok(at) = leaf.keys.binary_search_by(|k| k.cmp(&key)) {
+                    if let Ok(at) = leaf_search(&leaf.keys, &key) {
                         let leaf = self.as_leaf_mut(index);
                         return Ok(Some(mem::replace(&mut leaf.values[at], value)));
                     }
@@ -320,10 +323,7 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
         }
 
         let at = match &self.nodes[index] {
-            Node::Leaf(leaf) => leaf
-                .keys
-                .binary_search_by(|k| k.cmp(&key))
-                .expect_err("the key is absent"),
+            Node::Leaf(leaf) => leaf_search(&leaf.keys, &key).expect_err("the key is absent"),
             _ => unreachable!(),
         };
         if at == 0 && path.len > 0 {
@@ -654,6 +654,26 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
         }
     }
 
+    /// Shrinks the node arena and every node's key, value and child buffers to their live
+    /// lengths. Useful for a map that has finished growing and will be read mostly; the next
+    /// insert may reallocate.
+    pub fn shrink_to_fit(&mut self) {
+        self.nodes.shrink_to_fit();
+        for node in &mut self.nodes {
+            match node {
+                Node::Leaf(leaf) => {
+                    leaf.keys.shrink_to_fit();
+                    leaf.values.shrink_to_fit();
+                }
+                Node::Inner(inner) => {
+                    inner.keys.shrink_to_fit();
+                    inner.kids.shrink_to_fit();
+                }
+                Node::Free(_) => {}
+            }
+        }
+    }
+
     /// Removes and returns the first entry.
     pub fn pop_first(&mut self) -> Option<(K, V)>
     where
@@ -670,6 +690,97 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
     {
         let key = self.last_key_value()?.0.clone();
         self.remove(&key).map(|value| (key, value))
+    }
+
+    /// Calls `f` on every entry in key order with mutable access to the value.
+    ///
+    /// The substitute for `iter_mut`: the entries live in separate leaves, so handing out
+    /// `&mut` references in key order would need `unsafe`.
+    pub fn for_each_mut(&mut self, mut f: impl FnMut(&K, &mut V)) {
+        let mut at = self.first.get();
+        while let Some(index) = at {
+            let (next, len) = {
+                let leaf = match &self.nodes[index] {
+                    Node::Leaf(leaf) => leaf,
+                    _ => unreachable!("a leaf link led to a non-leaf node"),
+                };
+                (leaf.next, leaf.keys.len())
+            };
+            let leaf = self.as_leaf_mut(index);
+            for entry in 0..len {
+                f(&leaf.keys[entry], &mut leaf.values[entry]);
+            }
+            at = next.get();
+        }
+    }
+
+    /// An iterator over the entries whose keys fall in `range`, in key order.
+    ///
+    /// `range` seeks to the first leaf that can contain the start bound instead of walking from
+    /// the beginning. The end bound is checked as entries are produced.
+    pub fn range<R>(&self, range: R) -> Range<'_, K, V, W>
+    where
+        R: RangeBounds<K>,
+        K: Clone + Ord,
+    {
+        let (leaf, index) = match range.start_bound() {
+            Bound::Unbounded => (self.first, 0),
+            Bound::Included(key) => self.locate(key, false),
+            Bound::Excluded(key) => self.locate(key, true),
+        };
+        let end = match range.end_bound() {
+            Bound::Unbounded => None,
+            Bound::Included(key) => Some((key.clone(), true)),
+            Bound::Excluded(key) => Some((key.clone(), false)),
+        };
+        Range {
+            map: self,
+            leaf,
+            index,
+            end,
+        }
+    }
+
+    /// The leaf and index of the first key `>= key`, or the first key `> key` when `exclusive`.
+    fn locate(&self, key: &K, exclusive: bool) -> (Link<K, V, W>, usize)
+    where
+        K: Ord,
+    {
+        let Some(mut index) = self.root.get() else {
+            return (OptAbs::NULL, 0);
+        };
+        loop {
+            match &self.nodes[index] {
+                Node::Inner(inner) => {
+                    index = inner.kids[child_pos(&inner.keys, key)].get().unwrap_or(0);
+                }
+                Node::Leaf(leaf) => {
+                    let found = match leaf_search(&leaf.keys, key) {
+                        Ok(at) => at,
+                        Err(at) => at,
+                    };
+                    let mut at = found;
+                    if exclusive && at < leaf.keys.len() {
+                        at += 1;
+                    }
+                    let mut leaf_index = index;
+                    loop {
+                        let leaf = self.as_leaf(leaf_index);
+                        if at < leaf.keys.len() {
+                            return (link(leaf_index), at);
+                        }
+                        match leaf.next.get() {
+                            Some(next) => {
+                                leaf_index = next;
+                                at = 0;
+                            }
+                            None => return (OptAbs::NULL, 0),
+                        }
+                    }
+                }
+                Node::Free(_) => unreachable!("a live link led to a free node"),
+            }
+        }
     }
 
     /// An iterator over the entries in key order.
@@ -731,6 +842,53 @@ impl<K: Ord + Clone, V, W: Width> FromIterator<(K, V)> for BTreeMap<K, V, W> {
         map
     }
 }
+
+/// An iterator over a key range of a [`BTreeMap`], created by [`BTreeMap::range`].
+pub struct Range<'a, K, V, W: Width> {
+    map: &'a BTreeMap<K, V, W>,
+    leaf: Link<K, V, W>,
+    index: usize,
+    /// `(end key, inclusive)`; `None` means through the last entry.
+    end: Option<(K, bool)>,
+}
+
+impl<'a, K: Ord, V, W: Width> Iterator for Range<'a, K, V, W> {
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let leaf = self.map.as_leaf(self.leaf.get()?);
+            if self.index >= leaf.keys.len() {
+                self.leaf = leaf.next;
+                self.index = 0;
+                continue;
+            }
+            let key = &leaf.keys[self.index];
+            let value = &leaf.values[self.index];
+            if let Some((end, inclusive)) = &self.end {
+                match key.cmp(end) {
+                    core::cmp::Ordering::Greater => {
+                        self.leaf = OptAbs::NULL;
+                        return None;
+                    }
+                    core::cmp::Ordering::Equal if !*inclusive => {
+                        self.leaf = OptAbs::NULL;
+                        return None;
+                    }
+                    _ => {}
+                }
+            }
+            self.index += 1;
+            return Some((key, value));
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(self.map.len))
+    }
+}
+
+impl<K: Ord, V, W: Width> FusedIterator for Range<'_, K, V, W> {}
 
 /// An iterator over the entries of a [`BTreeMap`], created by [`BTreeMap::iter`].
 pub struct Iter<'a, K, V, W: Width> {

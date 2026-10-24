@@ -324,6 +324,91 @@ impl<K, V, W: Width, S> HashMap<K, V, W, S> {
         None
     }
 
+    /// Compacts live entries to the front, truncates the slot array and rebuilds the bucket
+    /// table at the smallest power of two that holds the current load. Useful after many
+    /// removals or a large `retain`; the next insert may reallocate.
+    pub fn shrink_to_fit(&mut self)
+    where
+        K: Hash,
+        S: BuildHasher,
+    {
+        let mut write = 0;
+        for read in 0..self.entries.len() {
+            if !self.live[read] {
+                continue;
+            }
+            if write != read {
+                self.entries.swap(write, read);
+                self.live[write] = true;
+                self.live[read] = false;
+            }
+            write += 1;
+        }
+        self.entries.truncate(write);
+        self.live.truncate(write);
+        self.free = OptAbs::NULL;
+        self.free_count = 0;
+        if self.len == 0 {
+            self.buckets.clear();
+            return;
+        }
+        let target = (self.len * LOAD_DEN)
+            .div_ceil(LOAD_NUM)
+            .next_power_of_two()
+            .max(MIN_BUCKETS);
+        self.rehash(target);
+    }
+
+    /// Calls `f` on every live entry with mutable access to the value.
+    pub fn for_each_mut(&mut self, mut f: impl FnMut(&K, &mut V)) {
+        for (index, live) in self.live.iter().enumerate() {
+            if *live {
+                let entry = &mut self.entries[index];
+                f(&entry.key, &mut entry.value);
+            }
+        }
+    }
+
+    /// Keeps only the entries for which `keep` returns true, in one pass over the slot array,
+    /// then rebuilds the bucket chains. Keys are hashed once, not once per removed key.
+    pub fn retain<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&K, &mut V) -> bool,
+        K: Hash + Default,
+        V: Default,
+        S: BuildHasher,
+    {
+        for index in 0..self.entries.len() {
+            if !self.live[index] {
+                continue;
+            }
+            let entry = &mut self.entries[index];
+            if keep(&entry.key, &mut entry.value) {
+                continue;
+            }
+            self.live[index] = false;
+            let _key = mem::take(&mut entry.key);
+            let _value = mem::take(&mut entry.value);
+            entry.next = self.free;
+            self.free = link(index);
+            self.free_count += 1;
+            self.len -= 1;
+        }
+        if !self.buckets.is_empty() {
+            self.rehash(self.buckets.len());
+        }
+    }
+
+    /// An iterator over the entries in slot order, with mutable values.
+    pub fn iter_mut(&mut self) -> IterMut<'_, K, V, W> {
+        IterMut {
+            remaining: self.len,
+            live: &self.live,
+            entries: self.entries.iter_mut(),
+            index: 0,
+        }
+    }
+
     /// An iterator over the entries in slot order.
     pub fn iter(&self) -> Iter<'_, K, V, W> {
         Iter {
@@ -504,6 +589,47 @@ impl<'a, K, V, W: Width> Iterator for Values<'a, K, V, W> {
 
 impl<K, V, W: Width> ExactSizeIterator for Values<'_, K, V, W> {}
 impl<K, V, W: Width> FusedIterator for Values<'_, K, V, W> {}
+
+/// An iterator over the entries of a [`HashMap`] with mutable values, created by
+/// [`HashMap::iter_mut`].
+pub struct IterMut<'a, K, V, W: Width> {
+    entries: core::slice::IterMut<'a, Entry<K, V, W>>,
+    live: &'a [bool],
+    index: usize,
+    remaining: usize,
+}
+
+impl<'a, K, V, W: Width> Iterator for IterMut<'a, K, V, W> {
+    type Item = (&'a K, &'a mut V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let entry = self.entries.next()?;
+            let index = self.index;
+            self.index += 1;
+            if self.live[index] {
+                self.remaining -= 1;
+                return Some((&entry.key, &mut entry.value));
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<K, V, W: Width> ExactSizeIterator for IterMut<'_, K, V, W> {}
+impl<K, V, W: Width> FusedIterator for IterMut<'_, K, V, W> {}
+
+impl<'a, K, V, W: Width, S> IntoIterator for &'a mut HashMap<K, V, W, S> {
+    type Item = (&'a K, &'a mut V);
+    type IntoIter = IterMut<'a, K, V, W>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
 
 /// An owning iterator over the entries of a [`HashMap`], in slot order.
 pub struct IntoIter<K, V, W: Width> {

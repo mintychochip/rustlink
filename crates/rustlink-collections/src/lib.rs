@@ -9,7 +9,7 @@
 //! | Container | Mirrors | Nodes |
 //! |---|---|---|
 //! | [`LinkedList`] | `std::collections::LinkedList` | one per element |
-//! | [`BTreeMap`], [`BTreeSet`] | `std::collections::BTreeMap`, `BTreeSet` | B+tree with Vec-backed 16-entry leaves and inner nodes |
+//! | [`BTreeMap`], [`BTreeSet`] | `std::collections::BTreeMap`, `BTreeSet` | B+tree with Vec-backed 128-entry leaves and inner nodes |
 //! | [`HashMap`], [`HashSet`] | `std::collections::HashMap`, `HashSet` | one entry per element, chained |
 //!
 //! ```
@@ -22,11 +22,12 @@
 //! assert_eq!(list.iter().copied().collect::<Vec<_>>(), [1, 2]);
 //! ```
 //!
-//! The crate is `no_std` with `alloc` and contains no `unsafe` code. Two API consequences:
-//! [`HashMap`] and [`HashSet`] move keys and values out of removed slots with `Default`
-//! placeholders (`K: Default`, `V: Default`), while [`BTreeMap`] only needs `K: Clone` to copy
-//! keys into inner-node separators; and no container exposes `iter_mut`, because handing out
-//! disjoint `&mut` references in an order that differs from storage order needs `unsafe`.
+//! The crate is `no_std` with `alloc` and contains no `unsafe` code. [`HashMap`] and [`HashSet`]
+//! move keys and values out of removed slots with `Default` placeholders (`K: Default`,
+//! `V: Default`), while [`BTreeMap`] only needs `K: Clone` to copy keys into inner-node
+//! separators. [`HashMap`] exposes `iter_mut`; the containers whose iteration order differs from
+//! storage order ([`BTreeMap`], [`LinkedList`]) provide `for_each_mut`, because handing out
+//! disjoint `&mut` references in that order would need `unsafe`.
 //!
 //! ```
 //! use rustlink_collections::{BTreeMap, HashMap};
@@ -53,7 +54,7 @@ mod hash;
 mod limit;
 mod list;
 
-pub use btree::{BTreeMap, BTreeSet};
+pub use btree::{BTreeMap, BTreeSet, Range};
 pub use error::Full;
 pub use hash::{FnvBuildHasher, FnvHasher, HashMap, HashSet};
 pub use list::LinkedList;

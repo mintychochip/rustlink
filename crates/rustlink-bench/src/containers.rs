@@ -32,10 +32,9 @@ const LIST_VARIANTS: &[&str] = &["std", "u16", "u32"];
 
 /// The workload size limit: 2^20 entries keeps a churn pass under the default budget.
 const MAX_N: usize = 1 << 20;
-/// A `u16` B+tree addresses 65,535 nodes; random insertion keeps leaves about two-thirds full,
-/// so it holds about 680,000 entries: 2^18 needs about 25,000 nodes and 2^19 about 51,000,
-/// while 2^20 exceeds the limit.
-const BTREE_16_MAX_N: usize = 1 << 19;
+/// A `u16` B+tree addresses 65,535 nodes. With 128-entry nodes it holds about 5.7 million
+/// entries at this fill: 2^22 fits and 2^23 does not.
+const BTREE_16_MAX_N: usize = 1 << 22;
 /// A `u16` hash map or list addresses 65,535 entry slots.
 const SLOT_16_MAX_N: u64 = 65_535;
 
@@ -403,7 +402,7 @@ impl Workload for BTreeMapWorkload {
             "u16" => {
                 if params.n > BTREE_16_MAX_N {
                     return Ok(Outcome::Skipped(
-                        "u16 links address 65,535 nodes, about 680,000 entries at this fill"
+                        "u16 links address 65,535 nodes, about 5.7 million entries at this fill"
                             .to_owned(),
                     ));
                 }
@@ -648,7 +647,7 @@ mod tests {
 
     #[test]
     fn sizes_beyond_a_u16_trees_node_limit_are_skipped_without_building() {
-        let params = Params::new(1 << 20);
+        let params = Params::new(1 << 23);
         let outcome = BTreeMapWorkload { op: Op::Lookup }
             .run("u16", &params)
             .unwrap();

@@ -2,8 +2,8 @@
 //!
 //! Leaves hold the entries and are chained in key order; inner nodes hold separator keys and
 //! child links. Every node lives in one `Vec` and children are addressed with `W`-wide
-//! [`OptAbs`] links, so `W` bounds the number of *nodes*, not entries: with 16-entry leaves a
-//! `u16` tree addresses up to about a million entries at full occupancy. A removed node's slot is reused.
+//! [`OptAbs`] links, so `W` bounds the number of *nodes*, not entries: with 128-entry leaves a
+//! `u16` tree addresses about 5.7 million entries at this fill. A removed node's slot is reused.
 //!
 //! Unlike `std::collections::BTreeMap`, keys and values are moved with `Vec::remove`, so `K` need
 //! not be `Default`; keys are cloned into inner-node separators, so `K: Clone`.
@@ -11,16 +11,16 @@
 mod map;
 mod set;
 
-pub use map::BTreeMap;
+pub use map::{BTreeMap, Range};
 pub use set::BTreeSet;
 
 use core::borrow::Borrow;
 use rustlink::{OptAbs, Width};
 
 /// Maximum entries in a leaf. A full leaf splits into two halves of `MIN_LEAF`.
-const LEAF_CAP: usize = 16;
+const LEAF_CAP: usize = 128;
 /// Maximum separators in an inner node; it then has `INNER_CAP + 1` children.
-const INNER_CAP: usize = 16;
+const INNER_CAP: usize = 128;
 /// Minimum live entries or separators in a non-root node.
 const MIN_LEAF: usize = LEAF_CAP / 2;
 const MIN_INNER: usize = INNER_CAP / 2;
@@ -92,6 +92,15 @@ where
     Q: Ord + ?Sized,
 {
     keys.partition_point(|separator| separator.borrow() <= key)
+}
+
+/// Finds `key` in a sorted leaf, returning its index or the insertion point.
+pub(crate) fn leaf_search<K, Q>(keys: &[K], key: &Q) -> Result<usize, usize>
+where
+    K: Borrow<Q> + Ord,
+    Q: Ord + ?Sized,
+{
+    keys.binary_search_by(|k| k.borrow().cmp(key))
 }
 
 #[cfg(test)]

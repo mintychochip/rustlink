@@ -275,3 +275,26 @@ fn the_set_matches_std_under_insert_and_remove() {
     expected.sort_unstable();
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn mutable_visits_and_retain_match_the_model() {
+    let mut map: HashMap<u32, u64, u16> = (0..500).map(|k| (k, u64::from(k))).collect();
+    map.for_each_mut(|key, value| *value = value.wrapping_add(u64::from(*key)));
+    for (_, value) in map.iter_mut() {
+        *value = value.wrapping_add(1);
+    }
+    for key in 0..500 {
+        assert_eq!(map.get(&key), Some(&(u64::from(key) * 2 + 1)));
+    }
+    let before = map.len();
+    map.retain(|key, _| key % 2 == 0);
+    assert_eq!(map.len(), before.div_ceil(2));
+    assert_eq!(map.len(), 250);
+    check(&map);
+    for key in 0..500 {
+        assert_eq!(map.get(&key).is_some(), key % 2 == 0);
+    }
+    map.shrink_to_fit();
+    check(&map);
+    assert_eq!(map.len(), 250);
+}
