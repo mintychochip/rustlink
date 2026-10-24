@@ -242,12 +242,59 @@ What the optimization changed (ratios are rustlink / `std`):
   map saves 4 bytes per entry but caps at 65,535 entries; the 16-bit list saves nothing (`u64`
   plus two `u16` links pads to the same 16 bytes as two `u32` links).
 
+### Sets
+
+A fourth record, `bench/sets/`, compares `BTreeSet` and `HashSet` with the standard library on
+`u32` keys: lookup, scan and churn (remove half, insert them back), 2^10 to 2^20 keys. Both sides
+build with an explicit `insert` loop over the same shuffled keys. That matters: std's
+`BTreeSet::from_iter` sorts and bulk-loads a dense tree, so using `collect()` on the std side
+would compare a different API path and make std look both faster and smaller. The record has 126
+cells: 117 done and 9 skipped (`u16` HashSet at 2^16 and up).
+
+| Heap bytes per key at 2^20 | `std` | `u32` links | `u16` links |
+|---|---:|---:|---:|
+| `BTreeSet<u32>` | 9.0 | 6.8 | 6.8 |
+| `HashSet<u32>` | 10.0 | 17.0 | 13.0 (2^14) |
+
+A `u16` B+tree holds about 5.7M keys at this fill; the `u16` HashSet is shown at 2^14, below its
+65,535-slot limit. Time relative to `std`; below 1 is faster. HashSet rows use `std-fnv` as the
+baseline so the hash function cancels. CPU time, median of 14 per-sweep ratios.
+
+| Workload / `std` | 2^14 | 2^16 | 2^18 | 2^20 |
+|---|---:|---:|---:|---:|
+| `btreeset-lookup`, `u32` | 0.67 | 0.68 | 0.71 | 0.67 |
+| `btreeset-scan`, `u32` | 0.49 | 0.46 | 0.45 | 0.35 |
+| `btreeset-churn`, `u32` | 0.85 | 0.90 | 0.94 | 0.90 |
+| `hashset-lookup`, `u32` / `std-fnv` | 0.83 | 0.94 | 1.22 | 1.40 |
+| `hashset-scan`, `u32` / `std-fnv` | 0.34 | 0.31 | 0.26 | 0.34 |
+| `hashset-churn`, `u32` / `std-fnv` | 0.87 | 0.74 | 1.65 | 1.55 |
+
+![Set traversal CPU time vs entries](bench/sets/plots/cpu.svg)
+
+![Set heap and peak RSS](bench/sets/plots/memory.svg)
+
+Both set charts are generated from `bench/sets/results.jsonl` by `python3 bench/sets/plot.py`.
+
+* **The B+tree set is a clean win.** It uses 6.8 bytes per key against std's 9.0 (24% less),
+  looks up in 0.67x to 0.71x std's time, scans in 0.35x to 0.49x, churns in 0.85x to 0.94x and
+  builds in 0.86x to 0.98x. The 128-entry nodes carry over from the map; a key-only entry makes
+  the node and arena overhead relatively more visible, but the larger nodes still win.
+* **The hash set loses memory when the value is zero-sized, though its scan is much faster.**
+  A chained entry is a 4-byte key, a 4-byte next link and a liveness byte, plus one 4-byte bucket
+  per 3/4 key. That is 17 bytes per key against std hashbrown's 10. Scan is 0.26x to 0.34x std's
+  time, lookup is 0.83x to 1.40x with the same hasher (slower at 2^18 and 2^20), and churn is
+  0.74x to 1.65x. The map record's 8-byte values amortize the same per-entry overhead, which is
+  why the map wins memory and the set does not.
+* **Width:** `u16` BTreeSet is 6.75 vs 6.79 bytes per key and within a few percent on time.
+  `u16` HashSet uses 13 vs 17 bytes per key (24% less) but caps at 65,535 keys; at 2^20 only the
+  `u32` variant runs.
+
 ## Benchmarks
 
 The `rustlink-bench` crate compares pointers, `Rc` nodes, `std::collections::BTreeSet`,
 hand-written `usize` and `u32` indices, every rustlink width and link form on trees, an expression
 tree, graphs, link-dense node graphs, B-trees and blobs, and `rustlink-collections` against
-`std::collections` on linked lists, ordered maps and hash maps.
+`std::collections` on linked lists, ordered maps, hash maps and sets.
 
 ```text
 cargo build --release --bins
@@ -259,9 +306,11 @@ target/release/sweep --workloads ngraph-mesh,ngraph-banded,ngraph-random,ngraph-
     --out my-decisive.jsonl --md my-decisive.md  # the node graphs and B-trees alone
 target/release/sweep --workloads btree-lookup,btree-scan,btree-churn,hash-lookup,hash-scan,hash-churn,list-scan \
     --sizes 10,12,14,16,18,20 --out my-containers.jsonl --md my-containers.md
+target/release/sweep --workloads btreeset-lookup,btreeset-scan,btreeset-churn,hashset-lookup,hashset-scan,hashset-churn \
+    --sizes 10,12,14,16,18,20 --out my-sets.jsonl --md my-sets.md
 ```
 
-`bench/results.md` is the first recorded sweep (the nine original workloads, 405 cells: the trees, the expression tree, the graphs and the blobs), and `bench/environment.txt` says how it was taken. `bench/decisive/` records the node graphs and B-trees (364 cells), which were measured in repeated sweeps and judged on ratios (`bench/decisive/environment.txt`). `bench/containers/` records the seven dynamic-container workloads (144 cells, 132 done and 12 skipped for width), with 14 complete sweeps, a merged results file, every replicate and a ratios table (`bench/containers/environment.txt`). All 22 workloads are registered, so a plain `sweep` runs 913 cells; without `--out` and `--md` it appends them to the first record's `bench/results.jsonl` and rewrites `bench/results.md`, whose report keeps the last measurement of every cell. Pass `--out` and `--md` for your own runs, and `--workloads` to pick a record's workloads.
+`bench/results.md` is the first recorded sweep (the nine original workloads, 405 cells: the trees, the expression tree, the graphs and the blobs), and `bench/environment.txt` says how it was taken. `bench/decisive/` records the node graphs and B-trees (364 cells), which were measured in repeated sweeps and judged on ratios (`bench/decisive/environment.txt`). `bench/containers/` records the seven dynamic-container workloads (144 cells, 132 done and 12 skipped for width), with 14 complete sweeps, a merged results file, every replicate and a ratios table (`bench/containers/environment.txt`). `bench/sets/` records the six set workloads (126 cells, 117 done and 9 skipped), built with the same explicit insert loop on both sides (`bench/sets/environment.txt`). All 28 workloads are registered, so a plain `sweep` runs 1039 cells; without `--out` and `--md` it appends them to the first record's `bench/results.jsonl` and rewrites `bench/results.md`, whose report keeps the last measurement of every cell. Pass `--out` and `--md` for your own runs, and `--workloads` to pick a record's workloads.
 
 Each cell runs in its own process pinned to one CPU with `taskset`, so peak RSS is clean. Leave
 the machine idle while a sweep runs, and check that it is first: `uptime` should show a load

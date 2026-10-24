@@ -1,0 +1,102 @@
+rustlink benchmark record: sets
+================================
+
+The six set workloads of `crates/rustlink-bench/src/sets.rs` (btreeset-lookup, btreeset-scan,
+btreeset-churn, hashset-lookup, hashset-scan, hashset-churn), measured on 2026-10-24 after the
+dynamic-container record. They compare `rustlink_collections::BTreeSet`/`HashSet` with
+`std::collections::BTreeSet`/`HashSet` on sets of `u32` keys.
+
+Files
+  results.jsonl    One row per cell (126): 117 done, 9 skipped. Each row is the per-field median of
+                   the 14 sweeps of replicates/, not a verbatim `sweep` line. Registry order.
+  results.md       The report, rendered from results.jsonl with `sweep --report-only`. Its header's
+                   git revision is the checkout the renderer ran in (8485cac), which is the code the
+                   measurement binaries were built from.
+  ratios.tsv       Paired ratios, variant / reference within one sweep: every sweep's value and
+                   the median over the 14. References are std, and `std-fnv` for the hash set.
+                   Metrics are traverse CPU, build CPU and heap.
+  replicates/      The 14 complete sweeps, run1.jsonl to run14.jsonl, in the order they ran.
+
+Machine and settings
+  CPU          Intel Core Ultra 7 270K Plus, 24 CPUs, no SMT; every cell pinned to cpu23 with
+               taskset. cpu23 is an E-core: L1d 32 KiB, L2 4 MiB, L3 36 MiB shared, maximum
+               frequency 4.7 GHz. Kernel 7.1.10-200.fc44.x86_64, rustc 1.99.0-nightly from
+               6f72b5dd5, release profile (opt-level 3, fat LTO). The governor is powersave.
+  Binaries     `sweep` and `rlb` built from 8485cac; no rebuild during the measurements.
+  Matrix       126 cells: btreeset-lookup, btreeset-scan and btreeset-churn accept std, u16 and
+               u32; the three hashset workloads accept std, std-fnv, u16 and u32. Sizes 2^10,
+               2^12, 2^14, 2^16, 2^18 and 2^20 keys; seed 1; 6 repetitions per cell (1 discarded
+               warm-up and 5 measured, in one fresh process).
+  Units        lookup, visit and op. Heap is live requested bytes per key after the build, from
+               the crate's counting allocator; it includes Vec capacity but not allocator metadata.
+               Peak RSS is the process maximum and includes growth transients.
+
+  Both sides of every build use an explicit `insert` loop over the same shuffled keys. In
+  particular, std's `BTreeSet::from_iter` sorts and bulk-loads a dense tree; using `collect()` on
+  the std side would compare that API path against random insertion on our side and make std's
+  build and heap figures artificially good. This record does not do that.
+
+Containers and variants
+  std      std::collections::BTreeSet / HashSet; HashSet uses the default SipHash hasher.
+  std-fnv  std::collections::HashSet with rustlink-collections' FNV-1a BuildHasher, so the hash
+           function matches the u16/u32 variants.
+  u16/u32  rustlink_collections::BTreeSet/HashSet with 16- or 32-bit OptAbs links. The B+tree
+           links address nodes; with 128-entry nodes a u16 tree holds about 5.7M keys. The hash
+           set's links address one entry slot per key, so a u16 hash set stops at 65,535 keys.
+  Build    shuffled distinct keys, inserted one at a time; the set values are absent, so the
+           entry stores only the key, its chain link and its liveness byte.
+  Traverse lookup: one probe per key, half present. scan: visit every key. churn: remove half the
+           keys and insert them back.
+
+Replicates and merge
+  Fourteen complete sweeps ran back to back (about 13 s each; 183 s in total). A cell's absolute
+  value in results.jsonl is the median of its 14 measurements. A ratio is taken inside each sweep
+  and reported as the median of the 14 ratios; the IQR in ratios.tsv shows the spread. The
+  machine was shared and no calm-window gate was applied; the 2^20 ratios carry the widest IQRs.
+
+Spread of the ratios that the README quotes (median over 14, interquartile range)
+  btreeset-lookup 2^14  u32 / std      traverse 0.67 (0.66-0.68)
+  btreeset-lookup 2^16  u32 / std      traverse 0.68 (0.67-0.68)
+  btreeset-lookup 2^18  u32 / std      traverse 0.71 (0.71-0.72)
+  btreeset-lookup 2^20  u32 / std      traverse 0.67 (0.67-0.68)
+  btreeset-scan   2^20  u32 / std      traverse 0.35 (0.34-0.36)
+  btreeset-churn  2^20  u32 / std      traverse 0.90 (0.89-0.91)
+  hashset-lookup  2^14  u32 / std-fnv  traverse 0.83 (0.82-0.85)
+  hashset-lookup  2^20  u32 / std-fnv  traverse 1.40 (1.38-1.41)
+  hashset-scan    2^20  u32 / std-fnv  traverse 0.34 (0.33-0.35)
+  hashset-churn   2^20  u32 / std-fnv  traverse 1.55 (1.51-1.60)
+
+  Absolute 2^20 traversal CPU time, median, ns per unit:
+    btreeset-lookup std 79.8, u32 53.6
+    btreeset-scan   std  3.0, u32  1.0
+    btreeset-churn  std 116.7, u32 105.7
+    hashset-lookup  std-fnv 7.5, u32 10.3
+    hashset-scan    std-fnv 1.4, u32 0.5
+    hashset-churn   std-fnv 7.4, u32 11.6
+
+Skipped cells (9, deterministic)
+  A u16 hash set addresses 65,535 entry slots, so its cells are skipped at 2^16, 2^18 and 2^20.
+  The u16 B+tree has no skip at these sizes; 65,535 nodes at 128 entries per node hold about
+  5.7M keys. No cell failed.
+
+Limits of this record
+  * One machine, one pinned E-core, one seed, shared and not quiet. Read ratios and the IQRs, not
+    differences between cells of results.md.
+  * Heap is requested capacity. std's BTreeSet allocates fixed-size nodes; this B+tree's node
+    arena and leaf key Vecs can carry spare capacity, and its 128-entry leaf reserves capacity for
+    a full leaf after a split. A root leaf reserves only its live length.
+  * The hash set keeps a 4-byte chain link and a liveness byte per key; for 4-byte keys this
+    overhead dominates. That is why the chained set loses memory to hashbrown even though its
+    scan is much faster. The map record's 8-byte values amortize the same overhead.
+  * No hardware counters were available, so cache explanations are inferences from footprint
+    sizes and from how ratios move with load.
+
+Reproduce
+  cargo build --release --bins
+  target/release/sweep \
+      --workloads btreeset-lookup,btreeset-scan,btreeset-churn,hashset-lookup,hashset-scan,hashset-churn \
+      --sizes 10,12,14,16,18,20 --reps 6 --cpu 23 \
+      --out my-run1.jsonl --md my-run1.md
+  Repeat, keep every run separate, and take the median of each cell's measurements and the median
+  of the per-sweep ratios. `sweep --report-only --out merged.jsonl --md merged.md` renders one
+  merged file. `python3 bench/sets/plot.py` renders the two SVGs in plots/.
