@@ -298,3 +298,33 @@ fn mutable_visits_and_retain_match_the_model() {
     check(&map);
     assert_eq!(map.len(), 250);
 }
+
+#[test]
+fn a_preallocated_u16_map_still_stops_at_the_width_limit() {
+    let mut map: HashMap<u32, u64, u16> = HashMap::with_capacity(100_000);
+    let mut accepted = 0u32;
+    loop {
+        match map.try_insert(accepted, u64::from(accepted)) {
+            Ok(_) => accepted += 1,
+            Err(Full((key, value))) => {
+                assert_eq!((key, value), (accepted, u64::from(accepted)));
+                break;
+            }
+        }
+    }
+    assert_eq!(accepted, 65_535);
+    assert_eq!(map.len(), 65_535);
+    check(&map);
+    for key in [0, 1, 65_534] {
+        assert_eq!(map.get(&key), Some(&u64::from(key)));
+    }
+}
+
+#[test]
+#[should_panic(expected = "cannot address another node")]
+fn a_preallocated_u16_map_panics_at_the_width_limit() {
+    let mut map: HashMap<u32, u64, u16> = HashMap::with_capacity(100_000);
+    for key in 0..=65_535u32 {
+        map.insert(key, u64::from(key));
+    }
+}

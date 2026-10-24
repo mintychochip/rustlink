@@ -370,7 +370,8 @@ impl<K, V, W: Width, S> HashMap<K, V, W, S> {
     }
 
     /// Keeps only the entries for which `keep` returns true, in one pass over the slot array,
-    /// then rebuilds the bucket chains. Keys are hashed once, not once per removed key.
+    /// then rebuilds the bucket chains. It hashes only survivors, so it is fastest when most
+    /// entries are removed; when about half survive, per-key `remove` is cheaper.
     pub fn retain<F>(&mut self, mut keep: F)
     where
         F: FnMut(&K, &mut V) -> bool,

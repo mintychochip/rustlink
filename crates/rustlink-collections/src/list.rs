@@ -892,3 +892,21 @@ mod tests {
         assert_eq!(front, (0..100).collect::<Vec<_>>());
     }
 }
+
+#[cfg(test)]
+mod preallocated_tests {
+    use super::*;
+
+    #[test]
+    fn a_preallocated_u16_list_still_stops_at_the_width_limit() {
+        let mut list: LinkedList<u32, u16> = LinkedList::with_capacity(100_000);
+        for i in 0..65_535 {
+            list.try_push_back(i).unwrap();
+        }
+        assert_eq!(list.try_push_back(7), Err(Full(7)));
+        assert_eq!(list.len(), 65_535);
+        assert_eq!(list.front(), Some(&0));
+        assert_eq!(list.back(), Some(&65_534));
+        assert!(list.is_contiguous());
+    }
+}

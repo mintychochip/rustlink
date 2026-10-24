@@ -453,3 +453,58 @@ fn shrink_and_mutable_visit_preserve_the_map() {
     check(&map);
     assert_eq!(map.len(), 2_001);
 }
+
+#[test]
+fn preallocated_width_limits_still_return_full() {
+    // A u8 arena addresses 255 nodes. Preallocating a larger arena must not let insertion
+    // exceed that; with 128-entry nodes the test reaches the node limit after many entries.
+    let mut map: BTreeMap<u32, u32, u8> = BTreeMap::with_capacity(100_000);
+    let mut accepted = 0u32;
+    loop {
+        match map.try_insert(accepted, accepted) {
+            Ok(_) => accepted += 1,
+            Err(Full((key, value))) => {
+                assert_eq!((key, value), (accepted, accepted));
+                break;
+            }
+        }
+    }
+    assert!(accepted > 0);
+    assert_eq!(map.len(), accepted as usize);
+    check(&map);
+    for key in 0..accepted {
+        assert_eq!(map.get(&key), Some(&key));
+    }
+}
+
+#[test]
+fn a_production_capacity_tree_survives_deep_splits_and_merges() {
+    let n = 220_000u32;
+    let mut keys: Vec<u32> = (0..n).collect();
+    let mut rng = Lcg(0xD1FF);
+    for i in (1..keys.len()).rev() {
+        let j = (rng.next() as usize) % (i + 1);
+        keys.swap(i, j);
+    }
+    let mut map: BTreeMap<u32, u64, u32> = BTreeMap::new();
+    let mut model: StdMap<u32, u64> = StdMap::new();
+    for &key in &keys {
+        assert_eq!(
+            map.insert(key, u64::from(key)),
+            model.insert(key, u64::from(key))
+        );
+    }
+    assert_matches(&map, &model);
+
+    // Remove 90% in a different random order, checking the inner borrow/merge paths often.
+    let mut removed = 0usize;
+    for &key in keys.iter().filter(|_| rng.next().is_multiple_of(10)) {
+        assert_eq!(map.remove(&key), model.remove(&key));
+        removed += 1;
+        if removed.is_multiple_of(5_000) {
+            check(&map);
+        }
+    }
+    assert!(removed >= 20_000, "removed {removed}");
+    assert_matches(&map, &model);
+}

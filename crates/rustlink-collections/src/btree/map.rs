@@ -174,11 +174,16 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
         prev: Link<K, V, W>,
         next: Link<K, V, W>,
     ) -> Link<K, V, W> {
-        // Both halves of a split start at `MIN_LEAF`; reserving the full leaf up front avoids
-        // reallocating on the next insert and keeps keys and values free of tuple padding.
-        let mut exact_keys = Vec::with_capacity(LEAF_CAP);
+        // A split half starts at `MIN_LEAF` and will refill, so reserve the full leaf. The root
+        // leaf starts empty; do not make a tiny map pay for 128 slots it may never use.
+        let capacity = if keys.len() >= MIN_LEAF {
+            LEAF_CAP
+        } else {
+            keys.len()
+        };
+        let mut exact_keys = Vec::with_capacity(capacity);
         exact_keys.extend(keys);
-        let mut exact_values = Vec::with_capacity(LEAF_CAP);
+        let mut exact_values = Vec::with_capacity(capacity);
         exact_values.extend(values);
         self.alloc(Node::Leaf(Leaf {
             keys: exact_keys,
