@@ -1,0 +1,190 @@
+rustlink benchmark record: node graphs and B-trees
+==================================================
+
+The six workloads of `docs/superpowers/specs/2026-10-23-decisive-workloads-design.md` (ngraph-mesh,
+ngraph-banded, ngraph-random, ngraph-chase, btree-64, btree-256), measured on 2026-10-23 after the
+first record (`bench/`). Predictions P1-P8 were written before the first measurement; their outcome
+is the last section of that note.
+
+Files
+  results.jsonl    One row per cell (364): 303 done, 61 unreachable. Every row is a verbatim line written
+                   by `sweep`, from the sweep named in replicates.tsv (column chosen_replicate). Registry
+                   order.
+  results.md       The report, rendered from results.jsonl with `sweep --report-only`. Each cell shows the
+                   value of one sweep (the median among the calm sweeps), a different sweep for every cell,
+                   so compare variants with ratios.tsv and do not divide two cells of results.md. In its
+                   header the git revision is the checkout the binaries were built from (5649039) and
+                   MemAvailable is the value when the report was rendered.
+  replicates.tsv   Per done cell (303): traversal-time statistics over the calm sweeps and over all 37
+                   sweeps, the sweep results.jsonl uses, and every sweep's value (replicate:ns). Together
+                   with sweeps.tsv it is enough to re-derive ratios.tsv and results.jsonl's selection.
+  sweeps.tsv       Per sweep (222 = 37 replicates x 6 workloads): the canary inflation, whether the sweep
+                   counts as calm, and the load while it ran (busy cores on the other CPUs, seconds lost
+                   on cpu2, cpu2's mean frequency).
+  ratios.tsv       Paired ratios, variant time / base time within one sweep: median, interquartile range
+                   and extremes over the calm sweeps, median and interquartile range over all sweeps. Bases:
+                   u32, usize, and rc (node graphs) or std (B-trees).
+
+Machine and settings
+  CPU          Intel Core Ultra 7 270K Plus, 24 CPUs, no SMT; every cell pinned to cpu2 (the CPU with the
+               highest cpuinfo_max_freq). Caches of cpu2: L1d 48K, L2 3 MiB, L3 36 MiB shared. Kernel
+               7.1.10-200.fc44.x86_64. Compiler rustc 1.99.0-nightly (6f72b5dd5 2026-07-22), release
+               profile (opt-level 3, fat LTO). Power as in bench/environment.txt (powersave governor,
+               balance_performance, turbo on); cpu2 averaged 5.38 to 5.40 GHz over the sweeps.
+  Binaries     `sweep` and `rlb` built from 5649039 and not rebuilt during the measurements.
+  Matrix       364 cells: the four node-graph workloads have 10 variants (rc, usize, u32, abs32, abs32-idx,
+               abs16, rel32, rel16, rel16-idx, rel8), the two B-tree workloads 6 (std, box, usize, u32,
+               abs32, abs16), each at 2^10 to 2^22 elements in steps of 2^2 (7 sizes). Seed 1, 6
+               repetitions per cell (1 discarded warm-up and 5 measured, inside one fresh process).
+               `abs32-idx` and `rel16-idx` are probes that exist only in the benchmark crate: they wrap
+               the same arenas as `abs32` and `rel16` but decode with the public `Link::target` and index
+               the slice themselves, without `Cursor`, to tell the cost of `Cursor` from the cost of the
+               decode.
+  Units        edge (ngraph-mesh, -banded, -random sweeps), step (ngraph-chase), lookup (B-trees);
+               heap bytes per node or, for B-trees, per key.
+
+Why 37 replicates, and how they are judged
+  The machine is a desktop shared with other sessions that build, test and run servers (see "Load"). The
+  first record's rule (the fastest measurement taken while few other CPUs were busy) cannot be met: the
+  busy-core count stopped predicting the slowdown. So every workload was measured in 37 complete sweeps
+  of its matrix, `sweep --workloads W` once per workload per replicate, the workload order rotated per
+  replicate, and the ratio between two variants is taken inside one sweep, where both ran within seconds
+  of each other under the same load. A cell's time is the median over sweeps, a ratio the median of the
+  per-sweep ratios.
+
+  Canaries: before and after every workload's sweep, three cells of the first record whose quiet
+  values are known were measured on cpu2 (graph-linked-seq u32 at 2^20, quiet 13.0 ns; graph-linked-shuf
+  u32 at 2^20, 25.8 ns; graph-linked-seq usize at 2^20, 19.37 ns). A canary reading is the mean of
+  (time now / quiet time) over the three cells; a sweep's inflation is the mean of its two bracketing
+  readings. A sweep is "calm" when its inflation is below 1.5. The tables in the README and the
+  statistics columns headed calm use the calm sweeps: 91 of 222 (ngraph-mesh 16, -banded 15, -random 16,
+  -chase 14, btree-64 15, btree-256 15). Calm sweeps still read 1.17 to 1.49 times the quiet values
+  (median 1.37): the machine was never quiet.
+
+  replicates  window (2026-10-23)  calm sweeps  how they ran
+  1-11        14:11-14:38          33 of 66      one replicate after another
+  12-24       14:41-15:39          2 of 78       same; the machine was busy, a replicate took 4.4 minutes
+                                                 instead of 2
+  25-37       15:42-16:52          56 of 78      each started only when the three canaries read at most
+                                                 1.3 times their quiet values (13 starts, 151 readings
+                                                 found the machine above that line and waited 15 s)
+  Replicate 12 was first interrupted by a full disk; its partial files were deleted and it ran again from
+  the start. An earlier partial set without the two probe variants is not part of the record.
+
+  results.jsonl keeps, for every done cell, the whole row of the calm sweep with the median traversal
+  time (the lower median for an even count, ties to the lower replicate). Unreachable cells only report
+  link distances and are deterministic; their rows come from replicate 1. Absolute times are therefore
+  the median of 14 to 16 calm sweeps, about 1.4 times slower than the quiet machine of the first record,
+  and cannot be compared with bench/results.md; ratios can.
+
+Load
+                      sweeps   other busy cores        seconds lost on cpu2        canary inflation
+                               median (10th-90th pct)  per sweep, median (max)     median (range)
+  calm                91       7.7 (3.5-12.8)          0.26 (5.5)                  1.37 (1.17-1.49)
+  not calm            131      12.2 (5.9-20.0)         25.2 (118.9)                3.06 (1.50-4.61)
+  replicates 1-11     66       8.2 (4.5-13.8)          0.49 (85.8)                 1.49
+  replicates 12-24    78       13.9 (6.0-20.6)         40.5 (118.9)                3.32
+  replicates 25-37    78       8.6 (3.5-16.4)          0.32 (73.1)                 1.42
+  Sampled at 10 Hz from /proc/stat and /proc/schedstat by a monitor pinned to cpu23; the sweep drivers
+  ran off cpu2 (taskset). "Lost" is the time tasks waited for cpu2 while the sweep ran (it includes the
+  two canary readings of the window). Inflation tracks the time lost on cpu2 (Spearman rank correlation
+  0.87 over the 222 sweeps) much better than the busy-core count (0.56): what slows a cell is another
+  task taking the pinned CPU and the shared L3, not the number of busy cores. "Calm" means the pinned CPU
+  was left alone; the machine still ran 7.7 busy cores beside it.
+
+What the load does to the ratios
+  Medians of the per-sweep ratios for the cells that decide the predictions, over the sweeps in each
+  inflation band. The sweeps per workload in the bands <1.3 / <1.5 / all / >=2.0 are: ngraph-mesh
+  6/16/37/15, ngraph-banded 6/15/37/16, ngraph-random 4/16/37/16, ngraph-chase 4/14/37/17, btree-64
+  3/15/37/14, btree-256 6/15/37/14.
+    sweeps used                                           <1.3  <1.5 (record)         all 37          >=2.0
+    ngraph-random 2^20  rc / u32            P2            2.31           2.15           2.15           2.11
+    ngraph-chase  2^20  rc / u32            P2            1.51           1.29           1.20           1.09
+    ngraph-mesh   2^22  rel16 / u32         P3            1.79           1.74           1.65           1.41
+    ngraph-chase  2^20  usize / u32         P4            1.45           1.22           1.17           1.07
+    ngraph-chase  2^18  usize / u32                       1.98           2.32           2.54           3.60
+    ngraph-chase  2^18  rc / u32                          2.91           3.63           4.20           4.34
+    ngraph-banded 2^20  rel16 / u32                       0.82           0.80           0.80           0.78
+    ngraph-banded 2^22  rel16 / u32                       0.83           0.83           0.83           0.85
+    btree-256     2^20  u32 / usize         P6            0.91           0.91           0.91           0.82
+    btree-256     2^22  u32 / usize         P6            0.79           0.85           0.91           0.98
+    btree-64      2^22  u32 / usize         P6            0.83           0.83           0.81           0.80
+    btree-64      2^22  abs32 / u32         P7            0.97           0.94           0.95           0.99
+    btree-256     2^22  abs32 / u32         P7            1.21           1.09           1.05           1.05
+    btree-64      2^20  std / u32           P8            1.75           1.69           1.64           1.43
+    btree-256     2^20  std / u32           P8            2.18           2.21           2.19           2.17
+  Most ratios do not move with the load: the banded `rel16` advantage (0.78 to 0.85 in every band),
+  the mesh `rel16` and `rc` penalties, the B-tree ratios at 2^18 and below. The ones that do are the
+  dependent chases at 2^20 and the B-trees at 2^22, where one variant's data fits the shared L3 and
+  another's does not: more load pushes both into DRAM and their ratio toward 1. The chase ratios at
+  2^20 against inflation (all 37 sweeps, Spearman -0.46 for usize/u32, -0.69 for rc/u32) extrapolate
+  linearly to 1.31 and 1.41 at inflation 1.0. That is an extrapolation and was not measured: the
+  record's 1.22 and 1.29 are probably conservative, and neither reaches the 2.0 that P2 predicted for
+  rc.
+
+How far the calm sweeps agree (per done cell; K = 14 to 16 sweeps)
+    size                                          2^10   2^12   2^14   2^16   2^18   2^20   2^22
+    max / min of a cell's calm values, median     1.107  1.104  1.098  1.069  1.151  1.390  1.321
+    max / min, 90th percentile                    1.152  1.172  1.336  1.187  2.861  2.063  1.934
+    p75 / p25 of a cell's calm values, median     1.069  1.069  1.013  1.016  1.041  1.076  1.056
+    interquartile range / median of the paired
+      ratios against u32, median                  0.068  0.079  0.019  0.022  0.111  0.118  0.053
+    same, 90th percentile                         0.092  0.091  0.050  0.046  0.363  0.223  0.117
+  Cells whose data is a few times the L2 or near the L3 are the noisiest, as in the first record: the node
+  graphs at 2^18 and 2^20 (5 to 67 MB), the B-trees at 2^20 and 2^22 (4 to 25 MB). Read ratios whose
+  interquartile ranges overlap as ties. Cells of 2^12 and fewer take microseconds per repetition and
+  are only indicative.
+
+Cells quoted in the README: time / u32 time, median (interquartile range) over the K calm sweeps
+    ngraph-mesh 2^16     (K=16)  rc 1.92 (1.90-1.95)   usize 1.12 (1.11-1.13)   abs32 1.66 (1.65-1.66)   rel32 2.22 (2.22-2.23)   rel16 2.17 (2.17-2.18)   abs32-idx 2.06 (2.05-2.07)   rel16-idx 2.18 (2.17-2.19)
+    ngraph-mesh 2^20     (K=16)  rc 2.63 (2.59-3.01)   usize 1.52 (1.34-1.56)   abs32 1.79 (1.64-2.01)   rel32 2.12 (1.87-2.36)   rel16 1.49 (1.36-1.72)   abs32-idx 1.89 (1.70-2.20)   rel16-idx 1.47 (1.38-1.61)
+    ngraph-mesh 2^22     (K=16)  rc 3.51 (3.38-3.66)   usize 1.89 (1.84-1.94)   abs32 2.05 (1.95-2.17)   rel32 2.38 (2.28-2.47)   rel16 1.74 (1.70-1.87)   abs32-idx 2.24 (2.07-2.33)   rel16-idx 1.72 (1.65-1.83)
+    ngraph-banded 2^20   (K=15)  rc 2.11 (1.97-2.16)   usize 1.63 (1.57-1.70)   abs32 1.23 (1.16-1.28)   rel32 1.42 (1.37-1.44)   rel16 0.80 (0.75-0.82)   abs32-idx 1.32 (1.19-1.34)   rel16-idx 0.78 (0.76-0.85)
+    ngraph-banded 2^22   (K=15)  rc 1.86 (1.82-1.92)   usize 1.52 (1.47-1.54)   abs32 1.23 (1.18-1.25)   rel32 1.40 (1.37-1.42)   rel16 0.83 (0.81-0.85)   abs32-idx 1.29 (1.27-1.31)   rel16-idx 0.82 (0.79-0.83)
+    ngraph-random 2^20   (K=16)  rc 2.15 (2.12-2.49)   usize 1.37 (1.34-1.57)   abs32 1.47 (1.31-1.64)   rel32 1.68 (1.53-1.91)   abs32-idx 1.41 (1.31-1.52)
+    ngraph-random 2^22   (K=16)  rc 1.76 (1.71-1.80)   usize 1.11 (1.08-1.11)   abs32 1.39 (1.36-1.41)   rel32 1.75 (1.73-1.77)   abs32-idx 1.47 (1.45-1.48)
+    ngraph-chase 2^18    (K=14)  rc 3.63 (3.23-4.26)   usize 2.32 (1.76-3.10)   abs32 1.00 (0.99-1.01)   rel32 1.04 (1.01-1.05)   abs32-idx 1.02 (1.00-1.04)
+    ngraph-chase 2^20    (K=14)  rc 1.29 (1.21-1.40)   usize 1.22 (1.17-1.31)   abs32 0.95 (0.87-1.01)   rel32 1.03 (0.99-1.10)   abs32-idx 1.00 (0.91-1.06)
+    ngraph-chase 2^22    (K=14)  rc 1.07 (1.07-1.08)   usize 1.04 (1.02-1.05)   abs32 0.98 (0.98-1.00)   rel32 1.00 (0.99-1.01)   abs32-idx 1.00 (0.99-1.00)
+    btree-64 2^18        (K=15)  std 1.90 (1.89-1.90)   box 1.07 (1.06-1.07)   usize 1.09 (1.09-1.09)   abs32 1.08 (1.07-1.08)   abs16 1.07 (1.06-1.07)
+    btree-64 2^20        (K=15)  std 1.69 (1.60-1.75)   box 1.08 (1.05-1.22)   usize 1.08 (1.04-1.10)   abs32 1.02 (0.97-1.06)
+    btree-64 2^22        (K=15)  std 1.63 (1.55-1.71)   box 1.12 (1.04-1.18)   usize 1.21 (1.15-1.27)   abs32 0.94 (0.90-0.98)
+    btree-256 2^18       (K=15)  std 2.21 (2.20-2.22)   box 1.07 (1.07-1.08)   usize 1.09 (1.09-1.10)   abs32 1.06 (1.05-1.06)   abs16 1.04 (1.03-1.04)
+    btree-256 2^20       (K=15)  std 2.21 (2.18-2.22)   box 1.06 (1.05-1.06)   usize 1.10 (1.10-1.10)   abs32 1.03 (1.02-1.03)   abs16 1.06 (1.05-1.07)
+    btree-256 2^22       (K=15)  std 2.28 (2.03-2.42)   box 1.06 (1.00-1.17)   usize 1.18 (1.09-1.23)   abs32 1.09 (0.97-1.20)
+  u32 time / usize time in the B-trees:
+    btree-64 2^18 0.92 (0.92-0.92)   2^20 0.92 (0.91-0.96)   2^22 0.83 (0.79-0.87)
+    btree-256 2^18 0.91 (0.91-0.92)  2^20 0.91 (0.91-0.91)   2^22 0.85 (0.82-0.91)
+  abs32 time / rc time (the node graphs; rc time / abs32 time is the reciprocal):
+    mesh 2^12 1.09, 2^16 0.86, 2^22 0.58; banded 2^20 0.59, 2^22 0.65; random 2^20 0.62, 2^22 0.80;
+    chase 2^18 0.28, 2^20 0.71, 2^22 0.92
+
+Unreachable cells (61, deterministic)
+  abs16 19, rel8 26, rel16 8 and rel16-idx 8 cells do not fit their graph. abs16 stops at 2^14 in the four
+  graph workloads: an absolute 16-bit link addresses at most 65,535 elements and the next size is 2^16.
+  rel8 fits the mesh only up to 2^12 and never the banded or the random graph (the chase walks the random
+  graph); rel16 fits the mesh and the banded graph at every size and the random graph up to 2^14 (a
+  direct run of `rlb run --workload ngraph-random --variant rel16` fits at n = 2^15 and not at
+  2^15 + 1024). In the B-trees abs16 stops when a level has more than 65,535 nodes: btree-64 at 2^20 keys
+  (about 69,900 leaves of 15 keys) and btree-256 at 2^22 keys (about 66,600 leaves of 63).
+
+Limits of this record
+  * One machine, one pinned core, one seed per cell, and a shared machine that was never quiet. The
+    ratios are medians of paired measurements; absolute times are not comparable with bench/results.md.
+  * No hardware counters were available (`perf` is not installed), so statements about caches (L2, L3,
+    DRAM) are inferences from working-set sizes and from how ratios move with load, not measurements.
+  * The B-trees are packed, bulk-loaded and static; std::collections::BTreeSet is a dynamic structure
+    with room for insertion and removal, so its time and memory are not those of an equal. No variant
+    mutates.
+  * The node graphs have exactly four links per node and sweeps read every neighbour's payload; the
+    chase reads one link per step chosen from the payload. Other link densities were not measured.
+
+Reproduce
+  cargo build --release --bins
+  target/release/sweep --workloads ngraph-mesh,ngraph-banded,ngraph-random,ngraph-chase,btree-64,btree-256 \
+      --out my.jsonl --md my.md
+  Repeat the command (the sweeps take 2 to 4 minutes together), keep the sweeps' files apart, and take
+  ratios between variants inside each sweep. Read a reference cell next to every sweep (for example
+  `target/release/rlb run --workload graph-linked-seq --variant u32 --n 1048576 --reps 6 --seed 1`
+  pinned to the same CPU with taskset, which read 13.0 ns on the quiet machine of the first record) and
+  distrust sweeps in which it reads more than 1.5 times that.

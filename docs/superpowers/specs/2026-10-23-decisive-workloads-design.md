@@ -50,3 +50,27 @@ The machine is shared and its background load changed during the first sweep's s
 ## Non-goals
 
 No mutation workloads (the arena is append-only), no `Rel` variant of the B-tree, no `dyn` node graphs, no changes to the library.
+
+## Outcome
+
+Measured on 2026-10-23 on the shared machine of the first record, in 37 repetitions of each workload's whole matrix. Ratios are taken inside one sweep and judged on the 14 to 16 calm sweeps per workload; `bench/decisive/environment.txt` defines calm, and `bench/decisive/ratios.tsv` has the interquartile ranges. The predictions above are unedited.
+
+| # | Verdict | Evidence |
+|---|---|---|
+| P1 | held | 222 done node-graph cells: 64, 40, 20, 12 and 8 bytes per node exactly (worst deviation 0). |
+| P2 | half: held on `ngraph-random`, falsified on `ngraph-chase` | `rc` / `u32` at 2^20: 2.15 (interquartile range 2.12 to 2.49) on the random sweep; 1.29 (1.21 to 1.40) on the chase, below the 1.5 line. The chase ratio grows as the machine calms (1.09 in the heaviest load band, 1.51 on the 4 calmest sweeps); extrapolated linearly to a quiet machine it is 1.41, still short of 2. |
+| P3 | falsified, on the high side | Mesh at 2^22: `rel16` / `u32` = 1.74 (1.70 to 1.87), above 1.3 (1.41 in the heaviest load band, 1.79 in the calmest). The cost is the decode itself: the ratio is already 2.17 at 2^16, where the `u32` graph fits the L2. The reading rule's other trigger fired: `ngraph-banded` `rel16` takes 0.80 (2^20) and 0.83 (2^22) of the `u32` time, in every load band. |
+| P4 | not decided | `usize` / `u32` at 2^20 = 1.22 (1.17 to 1.31): above the 1.1 falsification line, below the predicted 1.3. It is 1.07 in the heaviest load band and 1.45 on the 4 calmest sweeps. At 2^18, a size the prediction did not name, it is 2.32 (1.76 to 3.10). |
+| P5 | held | The reach matrix matches at every size of the grid. Direct runs: `rel16` on `ngraph-random` fits 2^15 nodes and not 2^15 + 1,024. |
+| P6 | not falsified; two numeric bounds missed | `u32` against `usize`. 256-byte nodes: memory 1.7% less (within 5%), time 0.91 at 2^18 and 2^20 (within 10%) but 0.85 (0.82 to 0.91) at 2^22, outside. 64-byte nodes: memory 8.6% less (within 15%), time 0.92 at 2^18 and 2^20 (predicted 10% to 25% faster: 8% is short) and 0.83 at 2^22 (within). No cell reaches 1.3x faster, and memory never differs by 20%. |
+| P7 | held on the medians, borderline at one cell | `abs32` / `u32` is 0.94 to 1.09 over 2^16 to 2^22. 256-byte nodes at 2^22: 1.09 (0.97 to 1.20), and 1.21 on the 6 calmest sweeps. |
+| P8 | falsified on time, held on memory | `BTreeSet` / `u32` lookup time is 1.63 to 2.28 over 2^16 to 2^22, against the 1.5 limit. Memory per key: 5.82 bytes against 4.72 (`abs32`, 64-byte nodes, 1.23x) and 4.16 (256-byte nodes, 1.40x), within 1.5x. |
+
+What follows, in the terms of "How to read the outcome":
+
+* P3 failed upward, so narrow links are not free in time: where a loop does not wait for memory, 32-bit links take 1.23x to 2.38x the `u32` time in sweeps of 2^16 nodes and up. In dependent chases (0.95x to 1.08x) and B-tree lookups (0.94x to 1.09x) the decode does not show. The probes `abs32-idx` and `rel16-idx`, which decode with `Link::target` and index the slice without `Cursor`, are no faster than the `Cursor` variants, so the cost is in the link decode and not in `Cursor`. Whether the checks inside that decode or its arithmetic dominate was not separated; an unchecked decode is the experiment that would.
+* The time argument exists in one regime: a large (2^20 nodes and up) local graph swept in order, where `rel16` reads 40% fewer bytes per node than `u32` and takes 0.80x to 0.83x of its time. It is absent in cache and absent on the mesh.
+* P6 held in substance: B-trees are not a place for narrow links. `u32` against `usize` saves 2% to 9% of memory and 8% to 17% of lookup time; `abs16` saves 2% to 6% more, up to its reach.
+* P8's miss is not a verdict on `BTreeSet`: it is dynamic, and these trees are static and packed to capacity.
+
+Deviations from the note's own plan: no separate paired runner was written. A workload's sweep takes 15 to 20 seconds, so the ratio between two variants inside one sweep is already a paired measurement; the sweeps were repeated 37 times with canary cells around each, and the judged sample is the calm subset (the first record's busy-core selection rule could not be met on this machine). Two probe variants (`abs32-idx`, `rel16-idx`) were added to the node graphs after the first look at the mesh, to separate the cost of `Cursor` from the cost of the decode. Layer 4 is unaffected: its gate (3.68x less heap at 0.81x to 0.84x of the time) rests on one workload, the expression tree, and part of its saving comes from variable-size records, not from varint links.
