@@ -83,7 +83,7 @@ def cpu_svg(data):
     work = {"B-tree lookup": "btree-lookup", "B-tree scan": "btree-scan", "B-tree churn": "btree-churn",
             "Hash lookup": "hash-lookup", "Hash scan": "hash-scan", "Hash churn": "hash-churn",
             "List scan": "list-scan"}
-    parts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 620" role="img">',
+    parts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 620" role="img" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">',
              f'<text x="20" y="22" font-size="14" font-weight="600" fill="{FG}">Traversal CPU time vs entries</text>',
              f'<text x="20" y="36" font-size="9" fill="{FG}">median of 14 sweeps, cpu23; lower is better; lines are std, std-fnv and u32 where present</text>']
     for i, (title, unit, variants) in enumerate(panels):
@@ -156,7 +156,7 @@ def memory_svg(data):
         ("List", {"std": data[("list-scan", "std", 1 << 20)]["peak_rss_kib"] / 1024,
                    "u32": data[("list-scan", "u32", 1 << 20)]["peak_rss_kib"] / 1024}),
     ]
-    parts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 340" role="img">',
+    parts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 340" role="img" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">',
              f'<text x="20" y="22" font-size="14" font-weight="600" fill="{FG}">Heap and peak RSS</text>',
              f'<text x="20" y="36" font-size="9" fill="{FG}">heap: requested bytes per entry at 2^20 (u16 at 2^14 for hash/list); RSS: process peak at 2^20</text>']
     parts.append(bar_panel(20, 50, "Heap bytes per entry", "B / entry", heap_groups,
