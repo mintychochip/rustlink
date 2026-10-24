@@ -167,13 +167,13 @@ ran on a P-core.
 
 | Heap bytes per entry at 2^20 | `std` | `u32` links | `u16` links |
 |---|---:|---:|---:|
-| `BTreeMap<u32, u64>` | 20.7 | 29.2 | 29.0 (2^18) |
+| `BTreeMap<u32, u64>` | 20.7 | 25.2 | 24.9 (2^18) |
 | `HashMap<u32, u64>` | 34.0 | 25.0 | 21.0 (2^14) |
 | `LinkedList<u64>` | 24.0 | 16.0 | 16.0 (2^14) |
 
-The `u16` column is shown at the largest size it can address: a B+tree's links address nodes
-(about 65,000 entries at this fill), while a hash map's and a list's address one slot per entry
-(65,535). `std-fnv` uses the same hasher and has the same 34.0 bytes per entry as `std`.
+The `u16` column is shown at the largest measured size that fits: a B+tree's links address nodes
+(about 680,000 entries at this fill; 2^18 is the largest measured fit), while a hash map's and a
+list's address one slot per entry (65,535). `std-fnv` uses the same hasher and has the same 34.0 bytes per entry as `std`.
 
 Time relative to `std`; below 1 is faster. The hash rows use `std-fnv` as the baseline, so the hash
 function cancels and the comparison is the container layout. CPU time, median of 14 per-sweep
@@ -181,40 +181,40 @@ ratios.
 
 | Workload / `std` | 2^14 | 2^16 | 2^18 | 2^20 |
 |---|---:|---:|---:|---:|
-| `btree-lookup`, `u32` | 0.87 | 0.96 | 1.06 | 1.23 (IQR 1.03-1.30) |
-| `btree-scan`, `u32` | 0.98 | 1.00 | 1.29 | 0.95 |
-| `btree-churn`, `u32` | 1.10 | 1.24 | 1.36 | 1.75 (IQR 1.62-1.88) |
-| `hash-lookup`, `u32` / `std-fnv` | 0.96 | 1.00 | 1.28 | 1.07 |
-| `hash-scan`, `u32` / `std-fnv` | 0.44 | 0.36 | 0.34 | 0.28 |
-| `hash-churn`, `u32` / `std-fnv` | 0.96 | 0.91 | 1.38 | 0.67 |
-| `list-scan`, `u32` | 1.58 | 1.37 | 0.49 | 0.96 |
+| `btree-lookup`, `u32` | 0.86 | 0.96 | 1.07 | 1.14 (IQR 1.11-1.21) |
+| `btree-scan`, `u32` | 1.03 | 1.05 | 1.30 | 0.93 |
+| `btree-churn`, `u32` | 1.15 | 1.31 | 1.41 | 1.75 (IQR 1.67-1.85) |
+| `hash-lookup`, `u32` / `std-fnv` | 0.80 | 0.96 | 1.29 | 1.08 |
+| `hash-scan`, `u32` / `std-fnv` | 0.45 | 0.36 | 0.33 | 0.29 |
+| `hash-churn`, `u32` / `std-fnv` | 0.94 | 0.73 | 1.40 | 0.65 |
+| `list-scan`, `u32` | 1.58 | 1.41 | 0.55 | 1.14 (IQR 1.04-1.20) |
 
-* **A dynamic B+tree does not save memory when values are large; the arena overhead is larger than
-  the links it replaces.** The tree takes 29.2 bytes per `u32` key and `u64` value against 20.7
-  for `std::collections::BTreeMap`, and 16-bit links save only 0.2 bytes because the links are a
-  small part of each entry. A leaf stores its entries in a `Vec` with its full 16-entry capacity,
-  each node is a 48-byte enum slot, and the node arena grows geometrically; std's B+tree allocates
-  fixed-size nodes and packs them more tightly. The same implementation is, however, faster than
-  std while it fits in cache: lookups take 0.87x std's time at 2^14 and 0.96x at 2^16, tie at
-  2^18, and 1.23x at 2^20. Builds cost 1.18x to 1.73x and churn 1.10x to 1.75x. Scans are a tie
-  within 0.95x to 1.29x.
+* **A dynamic B+tree still does not save memory when values are large; the arena overhead is
+  larger than the links it replaces.** Separate key and value `Vec`s remove the tuple padding, but
+  the tree still takes 25.2 bytes per `u32` key and `u64` value against 20.7 for
+  `std::collections::BTreeMap`; 16-bit links save only 0.3 bytes because the links are a small
+  part of each entry. Each leaf holds two `Vec`s with 16-entry capacity, each node is a 56-byte
+  enum slot, and the node arena grows geometrically; std's B+tree allocates fixed-size nodes and
+  packs them more tightly. The implementation is faster than std while it fits in cache: lookups
+  take 0.86x std's time at 2^14 and 0.96x at 2^16, 1.07x at 2^18 and 1.14x at 2^20. Builds cost
+  1.15x to 1.61x and churn 1.15x to 1.75x. Scans stay between 0.93x and 1.30x.
 * **The hash map is the memory winner and its scan is three times faster.** 25 bytes per entry
-  against 34, or 21 with 16-bit links, because entries are a flat `Vec` and buckets are 16-bit
-  indices. Scanning visits a contiguous slot array: 0.28x to 0.44x of std's time with the same
-  hasher, and 0.29x against std's default SipHash. Churn is 0.67x to 1.38x and lookup 0.96x to
-  1.28x with the same hasher, so the container's routing is not faster than hashbrown's; the
-  0.50x to 0.71x win against std's default map is mostly FNV against SipHash.
+  against 34, or 21 with 16-bit links, because entries are a flat `Vec` and buckets are index links
+  (32-bit for the 25-byte map, 16-bit for the 21-byte one). Scanning visits a contiguous slot
+  array: 0.29x to 0.45x of std's time with the same hasher, and 0.27x to 0.30x against std's
+  default SipHash. Churn is 0.65x to 1.40x and lookup 0.80x to 1.29x with the same hasher, so the
+  container's routing is not faster than hashbrown's at the large sizes; the 0.48x to 0.72x win
+  against std's default map is mostly FNV against SipHash.
 * **The linked list halves the memory and its build is ten times faster; its scan depends on
   cache.** 16 bytes per node against 24, and `push_back` into one `Vec` costs 0.09x to 0.10x of
   std's one-allocation-per-node build. At 2^14 and 2^16, where both lists fit in L2, link decoding
   makes the scan 1.4x to 1.6x slower. At 2^18 the contiguous 4 MiB array beats pointer chasing
-  (0.49x), and at 2^20 the two are within noise (0.96x, IQR 0.85-1.08) while the memory saving
-  remains.
-* **Width matters less than expected.** A 16-bit B+tree saves 0.2 bytes per entry and a 16-bit list
+  (0.55x), but at 2^20 it is 1.14x std's time (IQR 1.04-1.20); the memory saving remains.
+* **Width matters less than expected.** A 16-bit B+tree saves 0.3 bytes per entry and a 16-bit list
   saves nothing (`u64` plus two `u16` links pads to the same 16 bytes as two `u32` links); the
   16-bit hash map saves 4 bytes per entry but cannot hold more than 65,535 entries. The 16-bit
-  B+tree is 0.99x to 1.06x the `u32` time, the 16-bit hash map 0.69x to 1.00x, and the 16-bit list
-  1.12x to 1.14x, so the width is not a reliable time lever after it fits.
+  B+tree is 0.98x to 1.03x the `u32` time, the 16-bit hash map 0.96x to 1.30x, and the 16-bit
+  list 1.13x to 1.14x, so the width is not a reliable time lever after it fits.
 
 ## Benchmarks
 
