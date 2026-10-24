@@ -176,6 +176,8 @@ The `u16` B+tree holds about 5.7 million entries at this fill (2^22 fits, 2^23 d
 `u16` hash map and list address one slot per entry and are shown at 2^14, the largest measured
 size below their 65,535 limit. `std-fnv` uses the same hasher and the same 34.0 bytes as `std`.
 
+![Heap bytes per entry and peak RSS](bench/containers/plots/memory.svg)
+
 Time relative to `std`; below 1 is faster. The hash rows use `std-fnv` as the baseline, so the hash
 function cancels and the comparison is the container layout. CPU time, median of 14 per-sweep
 ratios.
@@ -189,6 +191,10 @@ ratios.
 | `hash-scan`, `u32` / `std-fnv` | 0.45 | 0.36 | 0.45 | 0.34 |
 | `hash-churn`, `u32` / `std-fnv` | 0.93 | 0.82 | 1.47 | 0.73 |
 | `list-scan`, `u32` | 0.34 | 0.26 | 0.13 | 0.63 |
+
+![Traversal CPU time vs entries](bench/containers/plots/cpu.svg)
+
+Both charts are generated from `bench/containers/results.jsonl` by `python3 bench/containers/plot.py`.
 
 What the optimization changed (ratios are rustlink / `std`):
 
