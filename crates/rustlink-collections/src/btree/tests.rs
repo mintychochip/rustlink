@@ -45,19 +45,20 @@ where
     loop {
         let leaf = map.as_leaf(at);
         let is_root = map.root.get() == Some(at);
-        assert!(leaf.entries.len() <= LEAF_CAP);
+        assert_eq!(leaf.keys.len(), leaf.values.len());
+        assert!(leaf.keys.len() <= LEAF_CAP);
         if !is_root || leaves > 0 {
             assert!(
-                leaf.entries.len() >= MIN_LEAF,
+                leaf.keys.len() >= MIN_LEAF,
                 "leaf {at} has {} entries",
-                leaf.entries.len()
+                leaf.keys.len()
             );
         }
-        for pair in leaf.entries.windows(2) {
-            assert!(pair[0].0 < pair[1].0, "leaf {at} is not sorted");
+        for pair in leaf.keys.windows(2) {
+            assert!(pair[0] < pair[1], "leaf {at} is not sorted");
         }
-        keys.extend(leaf.entries.iter().map(|(key, _)| key.clone()));
-        entries += leaf.entries.len();
+        keys.extend(leaf.keys.iter().cloned());
+        entries += leaf.keys.len();
         leaves += 1;
         assert_eq!(leaf.prev.get(), previous, "leaf {at} has a bad prev link");
         previous = Some(at);
@@ -105,7 +106,7 @@ where
     *visited += 1;
     assert!(*visited <= map.nodes.len());
     match &map.nodes[index] {
-        Node::Leaf(leaf) => (0, leaf.entries[0].0.clone()),
+        Node::Leaf(leaf) => (0, leaf.keys[0].clone()),
         Node::Inner(inner) => {
             assert_eq!(inner.keys.len() + 1, inner.kids.len());
             assert!(inner.keys.len() <= INNER_CAP);

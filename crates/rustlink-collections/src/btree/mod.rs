@@ -3,7 +3,7 @@
 //! Leaves hold the entries and are chained in key order; inner nodes hold separator keys and
 //! child links. Every node lives in one `Vec` and children are addressed with `W`-wide
 //! [`OptAbs`] links, so `W` bounds the number of *nodes*, not entries: with 16-entry leaves a
-//! `u16` tree addresses roughly a million entries. A removed node's slot is reused.
+//! `u16` tree addresses up to about a million entries at full occupancy. A removed node's slot is reused.
 //!
 //! Unlike `std::collections::BTreeMap`, keys and values are moved with `Vec::remove`, so `K` need
 //! not be `Default`; keys are cloned into inner-node separators, so `K: Clone`.
@@ -43,7 +43,8 @@ pub(crate) enum Node<K, V, W: Width> {
 
 #[derive(Clone)]
 pub(crate) struct Leaf<K, V, W: Width> {
-    pub(crate) entries: alloc::vec::Vec<(K, V)>,
+    pub(crate) keys: alloc::vec::Vec<K>,
+    pub(crate) values: alloc::vec::Vec<V>,
     pub(crate) prev: Link<K, V, W>,
     pub(crate) next: Link<K, V, W>,
 }

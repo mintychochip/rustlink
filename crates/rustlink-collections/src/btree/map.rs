@@ -17,8 +17,8 @@ use crate::limit::node_limit;
 
 /// A map from keys to values in key order.
 ///
-/// A node takes `Vec<(K, V)>` plus two `W`-byte links for a leaf, or one `K` per separator plus
-/// `W` bytes per child for an inner node. The tree is a B+tree: every entry is in a leaf, leaves
+/// A leaf takes two `Vec`s (keys and values) plus two `W`-byte links; an inner node takes one
+/// `K` per separator plus `W` bytes per child. The tree is a B+tree: every entry is in a leaf, leaves
 /// are chained in key order, and inner nodes only route. Lookups therefore touch fewer bytes per
 /// level than a map that stores values in inner nodes too, and a full scan follows one link per
 /// leaf.
@@ -123,7 +123,7 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
     }
 
     pub(crate) fn leaf_len(&self, index: usize) -> usize {
-        self.as_leaf(index).entries.len()
+        self.as_leaf(index).keys.len()
     }
 
     pub(crate) fn inner_len(&self, index: usize) -> usize {
@@ -166,12 +166,20 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
 
     fn alloc_leaf(
         &mut self,
-        entries: Vec<(K, V)>,
+        keys: Vec<K>,
+        values: Vec<V>,
         prev: Link<K, V, W>,
         next: Link<K, V, W>,
     ) -> Link<K, V, W> {
+        // Both halves of a split start at `MIN_LEAF`; reserving the full leaf up front avoids
+        // reallocating on the next insert and keeps keys and values free of tuple padding.
+        let mut exact_keys = Vec::with_capacity(LEAF_CAP);
+        exact_keys.extend(keys);
+        let mut exact_values = Vec::with_capacity(LEAF_CAP);
+        exact_values.extend(values);
         self.alloc(Node::Leaf(Leaf {
-            entries,
+            keys: exact_keys,
+            values: exact_values,
             prev,
             next,
         }))
@@ -203,11 +211,8 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
                     index = inner.kids[child_pos(&inner.keys, key)].get()?;
                 }
                 Node::Leaf(leaf) => {
-                    let at = leaf
-                        .entries
-                        .binary_search_by(|(k, _)| k.borrow().cmp(key))
-                        .ok()?;
-                    return Some(&leaf.entries[at].1);
+                    let at = leaf.keys.binary_search_by(|k| k.borrow().cmp(key)).ok()?;
+                    return Some(&leaf.values[at]);
                 }
                 Node::Free(_) => unreachable!("a live link led to a free node"),
             }
@@ -227,12 +232,9 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
                     index = inner.kids[child_pos(&inner.keys, key)].get()?;
                 }
                 Node::Leaf(leaf) => {
-                    let at = leaf
-                        .entries
-                        .binary_search_by(|(k, _)| k.borrow().cmp(key))
-                        .ok()?;
+                    let at = leaf.keys.binary_search_by(|k| k.borrow().cmp(key)).ok()?;
                     return match &mut self.nodes[index] {
-                        Node::Leaf(leaf) => Some(&mut leaf.entries[at].1),
+                        Node::Leaf(leaf) => Some(&mut leaf.values[at]),
                         _ => unreachable!(),
                     };
                 }
@@ -253,14 +255,16 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
     /// The first entry in key order.
     pub fn first_key_value(&self) -> Option<(&K, &V)> {
         let leaf = self.as_leaf(self.first.get()?);
-        let (key, value) = leaf.entries.first()?;
+        let key = leaf.keys.first()?;
+        let value = leaf.values.first()?;
         Some((key, value))
     }
 
     /// The last entry in key order.
     pub fn last_key_value(&self) -> Option<(&K, &V)> {
         let leaf = self.as_leaf(self.last.get()?);
-        let (key, value) = leaf.entries.last()?;
+        let key = leaf.keys.last()?;
+        let value = leaf.values.last()?;
         Some((key, value))
     }
 
@@ -271,7 +275,7 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
         K: Ord + Clone,
     {
         if self.root.get().is_none() {
-            let leaf = self.alloc_leaf(Vec::new(), OptAbs::NULL, OptAbs::NULL);
+            let leaf = self.alloc_leaf(Vec::new(), Vec::new(), OptAbs::NULL, OptAbs::NULL);
             self.root = leaf;
             self.first = leaf;
             self.last = leaf;
@@ -287,9 +291,9 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
                     index = inner.kids[at].get().expect("a child link is live");
                 }
                 Node::Leaf(leaf) => {
-                    if let Ok(at) = leaf.entries.binary_search_by(|(k, _)| k.cmp(&key)) {
+                    if let Ok(at) = leaf.keys.binary_search_by(|k| k.cmp(&key)) {
                         let leaf = self.as_leaf_mut(index);
-                        return Ok(Some(mem::replace(&mut leaf.entries[at].1, value)));
+                        return Ok(Some(mem::replace(&mut leaf.values[at], value)));
                     }
                     break;
                 }
@@ -317,8 +321,8 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
 
         let at = match &self.nodes[index] {
             Node::Leaf(leaf) => leaf
-                .entries
-                .binary_search_by(|(k, _)| k.cmp(&key))
+                .keys
+                .binary_search_by(|k| k.cmp(&key))
                 .expect_err("the key is absent"),
             _ => unreachable!(),
         };
@@ -328,7 +332,8 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
             self.set_first(&path, key.clone());
         }
         let leaf = self.as_leaf_mut(index);
-        leaf.entries.insert(at, (key, value));
+        leaf.keys.insert(at, key);
+        leaf.values.insert(at, value);
         self.len += 1;
         Ok(None)
     }
@@ -351,9 +356,15 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
         K: Clone,
     {
         let next = self.as_leaf(index).next;
-        let right_entries = self.as_leaf_mut(index).entries.split_off(MIN_LEAF);
-        let separator = right_entries[0].0.clone();
-        let right = self.alloc_leaf(right_entries, link(index), next);
+        let (right_keys, right_values) = {
+            let leaf = self.as_leaf_mut(index);
+            (
+                leaf.keys.split_off(MIN_LEAF),
+                leaf.values.split_off(MIN_LEAF),
+            )
+        };
+        let separator = right_keys[0].clone();
+        let right = self.alloc_leaf(right_keys, right_values, link(index), next);
         self.as_leaf_mut(index).next = right;
         match next.get() {
             Some(next) => self.as_leaf_mut(next).prev = right,
@@ -421,13 +432,11 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
             }
         }
         let at = match &self.nodes[index] {
-            Node::Leaf(leaf) => leaf
-                .entries
-                .binary_search_by(|(k, _)| k.borrow().cmp(key))
-                .ok()?,
+            Node::Leaf(leaf) => leaf.keys.binary_search_by(|k| k.borrow().cmp(key)).ok()?,
             _ => unreachable!(),
         };
-        let value = self.as_leaf_mut(index).entries.remove(at).1;
+        let value = self.as_leaf_mut(index).values.remove(at);
+        self.as_leaf_mut(index).keys.remove(at);
         self.len -= 1;
 
         if path.len == 0 {
@@ -443,11 +452,11 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
         if self.leaf_len(index) < MIN_LEAF {
             self.rebalance_leaf(parent, child, index);
             if matches!(&self.nodes[index], Node::Leaf(_)) {
-                let first = self.as_leaf(index).entries[0].0.clone();
+                let first = self.as_leaf(index).keys[0].clone();
                 self.set_first(&path, first);
             }
         } else if at == 0 {
-            let first = self.as_leaf(index).entries[0].0.clone();
+            let first = self.as_leaf(index).keys[0].clone();
             self.set_first(&path, first);
         }
 
@@ -502,9 +511,11 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
                 .get()
                 .expect("a live link");
             if self.leaf_len(left) > MIN_LEAF {
-                let entry = self.as_leaf_mut(left).entries.pop().expect("non-empty");
-                let first = entry.0.clone();
-                self.as_leaf_mut(index).entries.insert(0, entry);
+                let key = self.as_leaf_mut(left).keys.pop().expect("non-empty");
+                let value = self.as_leaf_mut(left).values.pop().expect("non-empty");
+                let first = key.clone();
+                self.as_leaf_mut(index).keys.insert(0, key);
+                self.as_leaf_mut(index).values.insert(0, value);
                 self.as_inner_mut(parent).keys[child - 1] = first;
                 return;
             }
@@ -514,9 +525,11 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
                 .get()
                 .expect("a live link");
             if self.leaf_len(right) > MIN_LEAF {
-                let entry = self.as_leaf_mut(right).entries.remove(0);
-                let first = self.as_leaf(right).entries[0].0.clone();
-                self.as_leaf_mut(index).entries.push(entry);
+                let key = self.as_leaf_mut(right).keys.remove(0);
+                let value = self.as_leaf_mut(right).values.remove(0);
+                let first = self.as_leaf(right).keys[0].clone();
+                self.as_leaf_mut(index).keys.push(key);
+                self.as_leaf_mut(index).values.push(value);
                 self.as_inner_mut(parent).keys[child] = first;
                 return;
             }
@@ -527,10 +540,12 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
                 .get()
                 .expect("a live link");
             let next = self.as_leaf(index).next;
-            let moved = mem::take(&mut self.as_leaf_mut(index).entries);
+            let keys = mem::take(&mut self.as_leaf_mut(index).keys);
+            let values = mem::take(&mut self.as_leaf_mut(index).values);
             {
                 let leaf = self.as_leaf_mut(left);
-                leaf.entries.extend(moved);
+                leaf.keys.extend(keys);
+                leaf.values.extend(values);
                 leaf.next = next;
             }
             match next.get() {
@@ -546,10 +561,12 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
                 .get()
                 .expect("a live link");
             let next = self.as_leaf(right).next;
-            let moved = mem::take(&mut self.as_leaf_mut(right).entries);
+            let keys = mem::take(&mut self.as_leaf_mut(right).keys);
+            let values = mem::take(&mut self.as_leaf_mut(right).values);
             {
                 let leaf = self.as_leaf_mut(index);
-                leaf.entries.extend(moved);
+                leaf.keys.extend(keys);
+                leaf.values.extend(values);
                 leaf.next = next;
             }
             match next.get() {
@@ -740,8 +757,8 @@ impl<'a, K, V, W: Width> Iterator for Iter<'a, K, V, W> {
         }
         loop {
             let leaf = self.map.as_leaf(self.front_leaf.get()?);
-            if self.front_index < leaf.entries.len() {
-                let (key, value) = &leaf.entries[self.front_index];
+            if self.front_index < leaf.keys.len() {
+                let (key, value) = (&leaf.keys[self.front_index], &leaf.values[self.front_index]);
                 self.front_index += 1;
                 self.remaining -= 1;
                 return Some((key, value));
@@ -766,7 +783,7 @@ impl<K, V, W: Width> DoubleEndedIterator for Iter<'_, K, V, W> {
             if self.back_index > 0 {
                 self.back_index -= 1;
                 self.remaining -= 1;
-                let (key, value) = &leaf.entries[self.back_index];
+                let (key, value) = (&leaf.keys[self.back_index], &leaf.values[self.back_index]);
                 return Some((key, value));
             }
             self.back_leaf = leaf.prev;
@@ -862,7 +879,8 @@ impl<K, V, W: Width> FusedIterator for Values<'_, K, V, W> {}
 pub struct IntoIter<K, V, W: Width> {
     nodes: Vec<Node<K, V, W>>,
     leaf: Link<K, V, W>,
-    entries: alloc::vec::IntoIter<(K, V)>,
+    keys: alloc::vec::IntoIter<K>,
+    values: alloc::vec::IntoIter<V>,
     remaining: usize,
 }
 
@@ -871,17 +889,26 @@ impl<K, V, W: Width> Iterator for IntoIter<K, V, W> {
 
     fn next(&mut self) -> Option<(K, V)> {
         loop {
-            if let Some(entry) = self.entries.next() {
+            if let Some(key) = self.keys.next() {
+                let value = self
+                    .values
+                    .next()
+                    .expect("a leaf's keys and values have the same length");
                 self.remaining -= 1;
-                return Some(entry);
+                return Some((key, value));
             }
             let leaf = self.leaf.get()?;
-            let (next, entries) = match &mut self.nodes[leaf] {
-                Node::Leaf(leaf) => (leaf.next, mem::take(&mut leaf.entries)),
+            let (next, keys, values) = match &mut self.nodes[leaf] {
+                Node::Leaf(leaf) => (
+                    leaf.next,
+                    mem::take(&mut leaf.keys),
+                    mem::take(&mut leaf.values),
+                ),
                 _ => unreachable!("a leaf link led to a non-leaf node"),
             };
             self.leaf = next;
-            self.entries = entries.into_iter();
+            self.keys = keys.into_iter();
+            self.values = values.into_iter();
         }
     }
 
@@ -902,7 +929,8 @@ impl<K, V, W: Width> IntoIterator for BTreeMap<K, V, W> {
         IntoIter {
             nodes: self.nodes,
             leaf: self.first,
-            entries: Vec::new().into_iter(),
+            keys: Vec::new().into_iter(),
+            values: Vec::new().into_iter(),
             remaining,
         }
     }

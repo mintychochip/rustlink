@@ -9,7 +9,7 @@
 //! | Container | Mirrors | Nodes |
 //! |---|---|---|
 //! | [`LinkedList`] | `std::collections::LinkedList` | one per element |
-//! | [`BTreeMap`], [`BTreeSet`] | `std::collections::BTreeMap`, `BTreeSet` | B+tree leaves and inner nodes of fixed capacity |
+//! | [`BTreeMap`], [`BTreeSet`] | `std::collections::BTreeMap`, `BTreeSet` | B+tree with Vec-backed 16-entry leaves and inner nodes |
 //! | [`HashMap`], [`HashSet`] | `std::collections::HashMap`, `HashSet` | one entry per element, chained |
 //!
 //! ```
