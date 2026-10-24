@@ -656,7 +656,7 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
 
     /// Shrinks the node arena and every node's key, value and child buffers to their live
     /// lengths. Useful for a map that has finished growing and will be read mostly; the next
-    /// insert may reallocate.
+    /// insert may reallocate. Free node slots stay in the arena; this does not compact them.
     pub fn shrink_to_fit(&mut self) {
         self.nodes.shrink_to_fit();
         for node in &mut self.nodes {
@@ -752,7 +752,9 @@ impl<K, V, W: Width> BTreeMap<K, V, W> {
         loop {
             match &self.nodes[index] {
                 Node::Inner(inner) => {
-                    index = inner.kids[child_pos(&inner.keys, key)].get().unwrap_or(0);
+                    index = inner.kids[child_pos(&inner.keys, key)]
+                        .get()
+                        .expect("a child link is live");
                 }
                 Node::Leaf(leaf) => {
                     let found = match leaf_search(&leaf.keys, key) {
