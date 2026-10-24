@@ -34,6 +34,8 @@ use rustlink::{Arena, BlobRef, OptAbs, Region, impl_links};
 use zerocopy::byteorder::little_endian::U32;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
+// A tree node: a key and two optional links of 2 bytes each. The node is 8 bytes; the same node
+// with two 8-byte pointers is 24.
 #[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned, Clone, Copy)]
 #[repr(C)]
 struct Node {
@@ -48,10 +50,12 @@ let leaf = arena.push(Node { key: U32::new(1), left: OptAbs::NULL, right: OptAbs
 arena.push(Node { key: U32::new(2), left: OptAbs::new(Some(leaf))?, right: OptAbs::NULL });
 assert_eq!(size_of::<Node>(), 8);
 
+// Links are resolved against the arena with a bounds check.
 let root = arena.cursor(1).unwrap();
 let left = root.follow(root.get().left).unwrap();
 assert_eq!(left.get().key.get(), 1);
 
+// A frozen image holds no addresses. Verify it when loading it back.
 let image = arena.freeze();
 let view = BlobRef::<Node>::verify(&image)?;
 assert_eq!(view.len(), 2);
@@ -88,7 +92,7 @@ merge rules are in each record's `environment.txt`.
 |---|---:|---:|---:|---:|---:|
 | graph node (payload + 4 links) | 64 | 40 | 20 | 12 | 8 |
 
-- Against `Rc`+`Weak`, `abs32` is 3.2× smaller and takes 0.27×–0.92× its time from 2^16 nodes up.
+- Against `Rc`+`Weak`, `abs32` is 3.2× smaller and takes 0.28×–0.92× its time from 2^16 nodes up.
 - Against hand-written `u32`, memory is equal; sweeps cost 1.2×–2.4×, but dependent chases and
   B-tree lookups are ~1.0×. `rel16` wins on large banded graphs (0.80×–0.83×).
 - In a B-tree link width barely matters; packed trees beat `BTreeSet` by 1.6×–2.3× in time and
