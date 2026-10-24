@@ -310,6 +310,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustlink-collections"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "rustlink",
+]
+
+[[package]]
 name = "rusty-fork"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

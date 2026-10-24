@@ -1,0 +1,18 @@
+[package]
+name = "rustlink-collections"
+description = "std-style LinkedList, BTreeMap, BTreeSet, HashMap and HashSet whose nodes are linked by narrow rustlink links"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["std"]
+# Adds `HashMap::new` and friends with the standard library's `RandomState`.
+std = []
+
+[dependencies]
+rustlink = { path = "../rustlink" }
+
+[dev-dependencies]
+proptest.workspace = true
