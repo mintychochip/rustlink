@@ -26,6 +26,8 @@ Machine and settings
                6f72b5dd5, release profile (opt-level 3, fat LTO). The governor is powersave; the
                core read 4.70 GHz during the runs.
   Binaries     `sweep` and `rlb` built from 69bab4f; no rebuild during the measurements.
+               Commits after it add tests and reserve a root leaf lazily; every benchmarked size
+               is above 128 entries, so no measured cell changes.
   Matrix       144 cells: btree-lookup, btree-scan and btree-churn accept std, u16 and u32;
                the three hash workloads accept std, std-fnv, u16 and u32; list-scan accepts std,
                u16 and u32. Sizes 2^10, 2^12, 2^14, 2^16, 2^18 and 2^20 entries; seed 1; 6
