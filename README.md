@@ -190,6 +190,16 @@ ratios.
 | `hash-churn`, `u32` / `std-fnv` | 0.93 | 0.82 | 1.47 | 0.73 |
 | `list-scan`, `u32` | 0.34 | 0.26 | 0.13 | 0.63 |
 
+What the optimization changed (ratios are rustlink / `std`):
+
+| At the same size | Before | After |
+|---|---:|---:|
+| B+tree heap, B/entry at 2^20 | 25.2 | **18.4** (std 20.7) |
+| B+tree lookup at 2^20 | 1.14× | **0.65×** |
+| B+tree churn at 2^20 | 1.75× | **0.98×** |
+| List scan at 2^14 | 1.58× | **0.34×** |
+| List scan at 2^20 | 1.14× | **0.63×** |
+
 * **The B+tree's node capacity was the real problem, not the link width or the search loop.**
   With 16-entry nodes it used 25.2 bytes per entry and looked up 1.1x slower than std. With
   128-entry leaves and inner nodes it uses 18.4 bytes (11% less than std), looks up in 0.62x to
