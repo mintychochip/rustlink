@@ -19,6 +19,7 @@ pub mod proc;
 pub mod registry;
 pub mod report;
 pub mod rng;
+pub mod sets;
 pub mod stats;
 pub mod trees;
 pub mod variants;

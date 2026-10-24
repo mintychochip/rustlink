@@ -12,7 +12,7 @@
 //!
 //! Map variants are `std` (and `std-fnv` for the hash map), `u16` and `u32`; the number is the
 //! width of the rustlink links. `u16` cells that cannot address the structure are `skipped`:
-//! a B+tree's links address nodes (about one per eight entries), while a hash map's and a linked
+//! a B+tree's links address nodes (about one per 88 entries), while a hash map's and a linked
 //! list's address one slot per entry.
 
 use std::collections::hash_map::RandomState;
@@ -69,7 +69,7 @@ impl Op {
 }
 
 /// `n` shuffled distinct keys and `n` probes, half present and half random.
-fn inputs(n: usize, seed: u64) -> (Vec<u32>, Vec<u32>) {
+pub(crate) fn inputs(n: usize, seed: u64) -> (Vec<u32>, Vec<u32>) {
     if n == 0 {
         return (Vec::new(), Vec::new());
     }
@@ -88,11 +88,11 @@ fn inputs(n: usize, seed: u64) -> (Vec<u32>, Vec<u32>) {
     (keys, probes)
 }
 
-fn value(key: u32) -> u64 {
+pub(crate) fn value(key: u32) -> u64 {
     u64::from(key) * 2 + 1
 }
 
-fn timed<M>(
+pub(crate) fn timed<M>(
     params: &Params,
     build: impl FnMut() -> M,
     traverse: impl FnMut(&mut M) -> Pass,
