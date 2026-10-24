@@ -10,6 +10,7 @@
 pub mod alloc;
 pub mod blob_load;
 pub mod btree;
+pub mod containers;
 pub mod graph;
 pub mod measure;
 pub mod ngraph;

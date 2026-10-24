@@ -27,7 +27,7 @@ pub(crate) fn run_variant<V: TreeBuild>(
     reach: &Reach,
     unit: &'static str,
     build: impl FnMut() -> V,
-    traverse: impl FnMut(&V) -> Pass,
+    traverse: impl FnMut(&mut V) -> Pass,
 ) -> Result<Outcome, String> {
     if !V::LIMIT.admits(nodes, reach) {
         return Ok(Outcome::Unreachable(*reach));

@@ -222,6 +222,17 @@ fn render_workload(out: &mut String, workload: &str, cells: &[&Measurement]) {
     table("Build (ns per node, median ± MAD)", &|m| {
         format!("{:.1} ± {:.1}", m.build_ns_median, m.build_ns_mad)
     });
+    if cells.iter().any(|m| m.build_cpu_ns_median.is_some()) {
+        table("Build CPU (ns per node, median ± MAD)", &|m| {
+            optional_measure(m.build_cpu_ns_median, m.build_cpu_ns_mad)
+        });
+    }
+    if cells.iter().any(|m| m.traverse_cpu_ns_median.is_some()) {
+        table(
+            &format!("Traverse CPU (ns per {unit}, median ± MAD)"),
+            &|m| optional_measure(m.traverse_cpu_ns_median, m.traverse_cpu_ns_mad),
+        );
+    }
     table("Heap (bytes per node)", &|m| {
         format!("{:.1}", m.heap_bytes_per_node)
     });
@@ -249,6 +260,13 @@ fn render_workload(out: &mut String, workload: &str, cells: &[&Measurement]) {
         }
         out.push('\n');
     }
+}
+
+fn optional_measure(median: Option<f64>, mad: Option<f64>) -> String {
+    median.map_or_else(
+        || "-".to_owned(),
+        |median| format!("{median:.1} ± {:.1}", mad.unwrap_or(0.0)),
+    )
 }
 
 fn write_table(
@@ -436,6 +454,24 @@ mod tests {
         assert!(text.contains("### Peak RSS (MiB)"));
         assert!(text.contains("| u32 | 2.0 | 2.0 |"));
         assert!(text.contains("### Node size (bytes)"));
+    }
+
+    #[test]
+    fn cpu_tables_appear_only_when_a_cell_has_cpu_data() {
+        let mut measured = cell("bst-bulk", "u32", 1 << 10, "done");
+        measured.build_cpu_ns_median = Some(40.0);
+        measured.build_cpu_ns_mad = Some(1.0);
+        measured.traverse_cpu_ns_median = Some(90.0);
+        measured.traverse_cpu_ns_mad = Some(2.0);
+        let text = render(&[measured], &info());
+        assert!(text.contains("### Build CPU (ns per node, median ± MAD)"));
+        assert!(text.contains("### Traverse CPU (ns per lookup, median ± MAD)"));
+        assert!(text.contains("| u32 | 40.0 ± 1.0 |"));
+        assert!(text.contains("| u32 | 90.0 ± 2.0 |"));
+
+        let without = render(&[cell("bst-bulk", "u32", 1 << 10, "done")], &info());
+        assert!(!without.contains("Build CPU"));
+        assert!(!without.contains("Traverse CPU"));
     }
 
     #[test]

@@ -7,6 +7,7 @@ use core::iter::FusedIterator;
 use rustlink::{OptAbs, Width};
 
 use crate::error::{Full, MESSAGE};
+use crate::limit::node_limit;
 
 type Link<T, W> = OptAbs<Node<T, W>, W>;
 
@@ -15,12 +16,6 @@ struct Node<T, W: Width> {
     value: T,
     prev: Link<T, W>,
     next: Link<T, W>,
-}
-
-/// The most nodes a container with `W`-wide optional links can hold: the stored value is the
-/// index plus one, so indices `0..W::MAX` are representable.
-pub(crate) fn node_limit<W: Width>() -> usize {
-    usize::try_from(W::MAX).unwrap_or(usize::MAX)
 }
 
 /// A doubly linked list whose nodes live in one `Vec` and point at each other with `W`-wide links.
@@ -69,6 +64,11 @@ impl<T, W: Width> LinkedList<T, W> {
             nodes: Vec::with_capacity(capacity),
             ..Self::new()
         }
+    }
+
+    /// `size_of` one node: the value plus its two links.
+    pub const fn node_bytes() -> usize {
+        core::mem::size_of::<Node<T, W>>()
     }
 
     /// Number of elements.

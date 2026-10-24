@@ -60,7 +60,7 @@ fn every_workload_and_variant_runs_at_n_1024_and_prints_one_valid_json_line() {
             if m.status == "done" {
                 assert!(
                     // std's B-tree nodes are private, so its node size is reported as 0
-                    m.traverse_ns_median > 0.0 && (m.node_bytes > 0 || variant == "std"),
+                    m.traverse_ns_median > 0.0 && (m.node_bytes > 0 || variant.starts_with("std")),
                     "{} {variant}",
                     workload.name()
                 );

@@ -22,11 +22,24 @@
 //! assert_eq!(list.iter().copied().collect::<Vec<_>>(), [1, 2]);
 //! ```
 //!
-//! The crate is `no_std` with `alloc` and contains no `unsafe` code. That has two consequences
-//! for the API: elements are moved with `Default` placeholders where a slot must stay valid
-//! (`BTreeMap` needs `K: Default`, `V: Default`), and there is no `iter_mut` on the containers
-//! whose iteration order differs from their storage order (`LinkedList`, `BTreeMap`), because
-//! handing out disjoint `&mut` references in that order needs `unsafe`.
+//! The crate is `no_std` with `alloc` and contains no `unsafe` code. Two API consequences:
+//! [`HashMap`] and [`HashSet`] move keys and values out of removed slots with `Default`
+//! placeholders (`K: Default`, `V: Default`), while [`BTreeMap`] only needs `K: Clone` to copy
+//! keys into inner-node separators; and no container exposes `iter_mut`, because handing out
+//! disjoint `&mut` references in an order that differs from storage order needs `unsafe`.
+//!
+//! ```
+//! use rustlink_collections::{BTreeMap, HashMap};
+//!
+//! let mut ordered: BTreeMap<u32, u32, u16> = BTreeMap::new();
+//! ordered.insert(2, 20);
+//! ordered.insert(1, 10);
+//! assert_eq!(ordered.iter().map(|(k, _)| *k).collect::<Vec<_>>(), [1, 2]);
+//!
+//! let mut hashed: HashMap<u32, u32, u16> = HashMap::new();
+//! hashed.insert(2, 20);
+//! assert_eq!(hashed.get(&2), Some(&20));
+//! ```
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -34,8 +47,13 @@
 
 extern crate alloc;
 
+mod btree;
 mod error;
+mod hash;
+mod limit;
 mod list;
 
+pub use btree::{BTreeMap, BTreeSet};
 pub use error::Full;
+pub use hash::{FnvBuildHasher, FnvHasher, HashMap, HashSet};
 pub use list::LinkedList;

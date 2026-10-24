@@ -53,6 +53,18 @@ pub fn mem_available_kib() -> Option<u64> {
     parse_status_kib(&fs::read_to_string("/proc/meminfo").ok()?, "MemAvailable")
 }
 
+/// The first field of a `/proc/<pid>/schedstat` line: nanoseconds spent on a CPU.
+pub fn parse_schedstat_ns(text: &str) -> Option<u64> {
+    text.split_whitespace().next()?.parse().ok()
+}
+
+/// Nanoseconds this thread has spent running on a CPU, from `/proc/thread-self/schedstat`.
+///
+/// `None` if the file is unavailable (non-Linux).
+pub fn thread_cpu_ns() -> Option<u64> {
+    parse_schedstat_ns(&fs::read_to_string("/proc/thread-self/schedstat").ok()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,6 +108,13 @@ mod tests {
     fn the_live_process_has_a_nonzero_peak_rss() {
         let stats = read_self().unwrap();
         assert!(stats.peak_rss_kib > 0);
+    }
+
+    #[test]
+    fn schedstat_takes_the_runtime_field() {
+        assert_eq!(parse_schedstat_ns("12345 678 9\n"), Some(12_345));
+        assert_eq!(parse_schedstat_ns(""), None);
+        assert_eq!(parse_schedstat_ns("nope 1 2"), None);
     }
 
     #[test]

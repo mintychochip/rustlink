@@ -4,6 +4,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use crate::alloc;
+use crate::proc;
 use crate::stats::{Dist, dist};
 use crate::workload::{Outcome, Reach};
 
@@ -50,6 +51,10 @@ pub struct RepStats {
     pub build: Dist,
     /// Traversal time in ns per unit of work.
     pub traverse: Dist,
+    /// Build CPU time in ns per node, when the platform reports thread CPU time.
+    pub build_cpu: Option<Dist>,
+    /// Traversal CPU time in ns per unit of work, when available.
+    pub traverse_cpu: Option<Dist>,
 }
 
 /// The warm-up repetition predicted the cell would exceed its time budget.
@@ -70,7 +75,7 @@ pub fn run_reps<S>(
     p: &Params,
     nodes: u64,
     mut build: impl FnMut() -> S,
-    mut traverse: impl FnMut(&S) -> Pass,
+    mut traverse: impl FnMut(&mut S) -> Pass,
 ) -> Result<RepStats, OverBudget> {
     assert!(
         p.reps >= 2,
@@ -81,9 +86,9 @@ pub fn run_reps<S>(
     let started = Instant::now();
     alloc::set_counting(true);
     let before = alloc::live_bytes();
-    let structure = build();
+    let mut structure = build();
     let after = alloc::live_bytes();
-    black_box(traverse(&structure).checksum);
+    black_box(traverse(&mut structure).checksum);
     drop(structure);
     alloc::set_counting(false);
     let warm_up = started.elapsed();
@@ -97,22 +102,34 @@ pub fn run_reps<S>(
 
     let mut build_ns = Vec::with_capacity(p.reps - 1);
     let mut traverse_ns = Vec::with_capacity(p.reps - 1);
+    let mut build_cpu_ns = Vec::with_capacity(p.reps - 1);
+    let mut traverse_cpu_ns = Vec::with_capacity(p.reps - 1);
     for _ in 1..p.reps {
+        let cpu_start = proc::thread_cpu_ns();
         let t = Instant::now();
-        let structure = build();
+        let mut structure = build();
         let built = t.elapsed();
+        let cpu_built = proc::thread_cpu_ns();
         let t = Instant::now();
-        let pass = traverse(black_box(&structure));
+        let pass = traverse(black_box(&mut structure));
         let traversed = t.elapsed();
+        let cpu_end = proc::thread_cpu_ns();
         black_box(pass.checksum);
         build_ns.push(built.as_nanos() as f64 / nodes as f64);
         traverse_ns.push(traversed.as_nanos() as f64 / pass.units.max(1) as f64);
+        if let (Some(start), Some(built), Some(end)) = (cpu_start, cpu_built, cpu_end) {
+            build_cpu_ns.push((built.saturating_sub(start)) as f64 / nodes as f64);
+            traverse_cpu_ns.push((end.saturating_sub(built)) as f64 / pass.units.max(1) as f64);
+        }
         drop(structure);
     }
+    let optional_dist = |samples: &[f64]| (!samples.is_empty()).then(|| dist(samples));
     Ok(RepStats {
         heap_bytes_per_node: after.saturating_sub(before) as f64 / nodes as f64,
         build: dist(&build_ns),
         traverse: dist(&traverse_ns),
+        build_cpu: optional_dist(&build_cpu_ns),
+        traverse_cpu: optional_dist(&traverse_cpu_ns),
     })
 }
 
@@ -147,6 +164,14 @@ pub struct Measurement {
     pub traverse_ns_median: f64,
     /// Traversal MAD.
     pub traverse_ns_mad: f64,
+    /// Median build CPU ns per node, when the platform reports it.
+    pub build_cpu_ns_median: Option<f64>,
+    /// Build CPU MAD.
+    pub build_cpu_ns_mad: Option<f64>,
+    /// Median traversal CPU ns per unit, when the platform reports it.
+    pub traverse_cpu_ns_median: Option<f64>,
+    /// Traversal CPU MAD.
+    pub traverse_cpu_ns_mad: Option<f64>,
     /// Peak resident set size of the process in KiB (`VmHWM`).
     pub peak_rss_kib: u64,
     /// Minor page faults of the process.
@@ -184,6 +209,10 @@ impl Measurement {
                 m.build_ns_mad = metrics.build.mad;
                 m.traverse_ns_median = metrics.traverse.median;
                 m.traverse_ns_mad = metrics.traverse.mad;
+                m.build_cpu_ns_median = metrics.build_cpu.map(|cpu| cpu.median);
+                m.build_cpu_ns_mad = metrics.build_cpu.map(|cpu| cpu.mad);
+                m.traverse_cpu_ns_median = metrics.traverse_cpu.map(|cpu| cpu.median);
+                m.traverse_cpu_ns_mad = metrics.traverse_cpu.map(|cpu| cpu.mad);
                 if let Some(reach) = &metrics.reach {
                     m.set_reach(reach);
                 }
@@ -230,6 +259,18 @@ impl Measurement {
         obj.float("build_ns_mad", self.build_ns_mad);
         obj.float("traverse_ns_median", self.traverse_ns_median);
         obj.float("traverse_ns_mad", self.traverse_ns_mad);
+        if let Some(value) = self.build_cpu_ns_median {
+            obj.float("build_cpu_ns_median", value);
+        }
+        if let Some(value) = self.build_cpu_ns_mad {
+            obj.float("build_cpu_ns_mad", value);
+        }
+        if let Some(value) = self.traverse_cpu_ns_median {
+            obj.float("traverse_cpu_ns_median", value);
+        }
+        if let Some(value) = self.traverse_cpu_ns_mad {
+            obj.float("traverse_cpu_ns_mad", value);
+        }
         obj.number("peak_rss_kib", self.peak_rss_kib);
         obj.number("minor_faults", self.minor_faults);
         obj.number("major_faults", self.major_faults);
@@ -257,6 +298,14 @@ impl Measurement {
                 .unwrap_or_else(|_| t.parse::<f64>().map_or(0, |f| f as u64))
         };
         let float = |key: &str| -> f64 { text(key).parse::<f64>().unwrap_or(0.0) };
+        let optional_float = |key: &str| -> Option<f64> {
+            fields
+                .iter()
+                .find(|(k, _)| k == key)
+                .and_then(|(_, value)| match value {
+                    Value::Str(text) | Value::Num(text) => text.parse().ok(),
+                })
+        };
         Ok(Measurement {
             workload: text("workload"),
             variant: text("variant"),
@@ -272,6 +321,10 @@ impl Measurement {
             build_ns_mad: float("build_ns_mad"),
             traverse_ns_median: float("traverse_ns_median"),
             traverse_ns_mad: float("traverse_ns_mad"),
+            build_cpu_ns_median: optional_float("build_cpu_ns_median"),
+            build_cpu_ns_mad: optional_float("build_cpu_ns_mad"),
+            traverse_cpu_ns_median: optional_float("traverse_cpu_ns_median"),
+            traverse_cpu_ns_mad: optional_float("traverse_cpu_ns_mad"),
             peak_rss_kib: int("peak_rss_kib"),
             minor_faults: int("minor_faults"),
             major_faults: int("major_faults"),
@@ -499,6 +552,10 @@ mod tests {
             build_ns_mad: 1.5,
             traverse_ns_median: 99.75,
             traverse_ns_mad: 0.25,
+            build_cpu_ns_median: Some(120.5),
+            build_cpu_ns_mad: Some(1.25),
+            traverse_cpu_ns_median: Some(98.5),
+            traverse_cpu_ns_mad: Some(0.5),
             peak_rss_kib: 123_456,
             minor_faults: 7,
             major_faults: 1,
@@ -556,6 +613,8 @@ mod tests {
                 median: 2.0,
                 mad: 0.2,
             },
+            build_cpu: None,
+            traverse_cpu: None,
             unit: "lookup",
             reach: Some(Reach::from_deltas([1, 2, 300])),
         });

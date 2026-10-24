@@ -1,7 +1,7 @@
 //! The list of registered workloads. Each workload module exposes a `workloads()` function.
 
 use crate::workload::Workload;
-use crate::{blob_load, btree, graph, ngraph, trees};
+use crate::{blob_load, btree, containers, graph, ngraph, trees};
 
 /// Every registered workload, in report order.
 pub fn all() -> Vec<Box<dyn Workload>> {
@@ -10,6 +10,7 @@ pub fn all() -> Vec<Box<dyn Workload>> {
     all.extend(blob_load::workloads());
     all.extend(ngraph::workloads());
     all.extend(btree::workloads());
+    all.extend(containers::workloads());
     all
 }
 
@@ -43,6 +44,13 @@ mod tests {
                 "ngraph-chase",
                 "btree-64",
                 "btree-256",
+                "btree-lookup",
+                "btree-scan",
+                "btree-churn",
+                "hash-lookup",
+                "hash-scan",
+                "hash-churn",
+                "list-scan",
             ]
         );
     }

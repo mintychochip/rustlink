@@ -95,6 +95,10 @@ pub struct Metrics {
     pub build: Dist,
     /// Traversal time in ns per unit of work.
     pub traverse: Dist,
+    /// Build CPU time in ns per node, when the platform reports it.
+    pub build_cpu: Option<Dist>,
+    /// Traversal CPU time in ns per unit of work, when the platform reports it.
+    pub traverse_cpu: Option<Dist>,
     /// What one unit of traversal work is: `"lookup"`, `"visit"`, `"edge"` or `"node"`.
     pub unit: &'static str,
     /// Link-distance statistics, when the workload measured them.
@@ -126,6 +130,8 @@ impl Outcome {
                 heap_bytes_per_node: stats.heap_bytes_per_node,
                 build: stats.build,
                 traverse: stats.traverse,
+                build_cpu: stats.build_cpu,
+                traverse_cpu: stats.traverse_cpu,
                 unit,
                 reach,
             }),

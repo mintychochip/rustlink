@@ -8,4 +8,5 @@ publish.workspace = true
 
 [dependencies]
 rustlink = { path = "../rustlink" }
+rustlink-collections = { path = "../rustlink-collections" }
 zerocopy.workspace = true
