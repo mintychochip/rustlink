@@ -156,6 +156,7 @@ standard library's dynamic containers: `BTreeMap`/`BTreeSet`, `HashMap`/`HashSet
 Seven workloads build a structure and then look up, scan or churn (remove half the keys and put
 them back). The variants are `std`, `std-fnv` (std's `HashMap` with the same FNV-1a hasher as the
 rustlink map), `u16` and `u32`; the number is the link width. Sizes run from 2^10 to 2^20 entries.
+132 cells ran; the 12 skipped are `u16` hash-map and list cells at 2^16 and up.
 
 Heap bytes are requested bytes per entry after the build; times are per lookup, visit or operation
 from `CLOCK_THREAD_CPUTIME_ID`. Each figure is the median of 14 complete sweeps on one pinned
@@ -167,13 +168,13 @@ ran on a P-core.
 
 | Heap bytes per entry at 2^20 | `std` | `u32` links | `u16` links |
 |---|---:|---:|---:|
-| `BTreeMap<u32, u64>` | 20.7 | 25.2 | 24.9 (2^18) |
+| `BTreeMap<u32, u64>` | 20.7 | 18.4 | 18.3 |
 | `HashMap<u32, u64>` | 34.0 | 25.0 | 21.0 (2^14) |
 | `LinkedList<u64>` | 24.0 | 16.0 | 16.0 (2^14) |
 
-The `u16` column is shown at the largest measured size that fits: a B+tree's links address nodes
-(about 680,000 entries at this fill; 2^18 is the largest measured fit), while a hash map's and a
-list's address one slot per entry (65,535). `std-fnv` uses the same hasher and has the same 34.0 bytes per entry as `std`.
+The `u16` B+tree holds about 5.7 million entries at this fill (2^22 fits, 2^23 does not); the
+`u16` hash map and list address one slot per entry and are shown at 2^14, the largest measured
+size below their 65,535 limit. `std-fnv` uses the same hasher and the same 34.0 bytes as `std`.
 
 Time relative to `std`; below 1 is faster. The hash rows use `std-fnv` as the baseline, so the hash
 function cancels and the comparison is the container layout. CPU time, median of 14 per-sweep
@@ -181,40 +182,49 @@ ratios.
 
 | Workload / `std` | 2^14 | 2^16 | 2^18 | 2^20 |
 |---|---:|---:|---:|---:|
-| `btree-lookup`, `u32` | 0.86 | 0.96 | 1.07 | 1.14 (IQR 1.11-1.21) |
-| `btree-scan`, `u32` | 1.03 | 1.05 | 1.30 | 0.93 |
-| `btree-churn`, `u32` | 1.15 | 1.31 | 1.41 | 1.75 (IQR 1.67-1.85) |
-| `hash-lookup`, `u32` / `std-fnv` | 0.80 | 0.96 | 1.29 | 1.08 |
-| `hash-scan`, `u32` / `std-fnv` | 0.45 | 0.36 | 0.33 | 0.29 |
-| `hash-churn`, `u32` / `std-fnv` | 0.94 | 0.73 | 1.40 | 0.65 |
-| `list-scan`, `u32` | 1.58 | 1.41 | 0.55 | 1.14 (IQR 1.04-1.20) |
+| `btree-lookup`, `u32` | 0.62 | 0.63 | 0.65 | 0.65 (IQR 0.60-0.73) |
+| `btree-scan`, `u32` | 0.51 | 0.49 | 0.43 | 0.24 |
+| `btree-churn`, `u32` | 0.95 | 1.00 | 1.04 | 0.98 |
+| `hash-lookup`, `u32` / `std-fnv` | 0.80 | 1.00 | 1.21 | 1.22 |
+| `hash-scan`, `u32` / `std-fnv` | 0.45 | 0.36 | 0.45 | 0.34 |
+| `hash-churn`, `u32` / `std-fnv` | 0.93 | 0.82 | 1.47 | 0.73 |
+| `list-scan`, `u32` | 0.34 | 0.26 | 0.13 | 0.63 |
 
-* **A dynamic B+tree still does not save memory when values are large; the arena overhead is
-  larger than the links it replaces.** Separate key and value `Vec`s remove the tuple padding, but
-  the tree still takes 25.2 bytes per `u32` key and `u64` value against 20.7 for
-  `std::collections::BTreeMap`; 16-bit links save only 0.3 bytes because the links are a small
-  part of each entry. Each leaf holds two `Vec`s with 16-entry capacity, each node is a 56-byte
-  enum slot, and the node arena grows geometrically; std's B+tree allocates fixed-size nodes and
-  packs them more tightly. The implementation is faster than std while it fits in cache: lookups
-  take 0.86x std's time at 2^14 and 0.96x at 2^16, 1.07x at 2^18 and 1.14x at 2^20. Builds cost
-  1.15x to 1.61x and churn 1.15x to 1.75x. Scans stay between 0.93x and 1.30x.
+* **The B+tree's node capacity was the real problem, not the link width or the search loop.**
+  With 16-entry nodes it used 25.2 bytes per entry and looked up 1.1x slower than std. With
+  128-entry leaves and inner nodes it uses 18.4 bytes (11% less than std), looks up in 0.62x to
+  0.65x std's time, scans in 0.24x to 0.51x, churns in 0.95x to 1.04x, and builds in 0.99x to
+  1.14x. A million entries now need about three levels, and the per-node headers and arena slack
+  are amortized over 11 times as many entries. A separate microbenchmark said linear scans beat
+  binary search at 8 and 16 entries, and branchless search beat binary at 64 and up; in the real
+  tree binary search at 128 entries won, and branchless search was 1.2x to 1.4x slower. The
+  capacity change dwarfs either.
 * **The hash map is the memory winner and its scan is three times faster.** 25 bytes per entry
   against 34, or 21 with 16-bit links, because entries are a flat `Vec` and buckets are index links
   (32-bit for the 25-byte map, 16-bit for the 21-byte one). Scanning visits a contiguous slot
-  array: 0.29x to 0.45x of std's time with the same hasher, and 0.27x to 0.30x against std's
-  default SipHash. Churn is 0.65x to 1.40x and lookup 0.80x to 1.29x with the same hasher, so the
-  container's routing is not faster than hashbrown's at the large sizes; the 0.48x to 0.72x win
-  against std's default map is mostly FNV against SipHash.
-* **The linked list halves the memory and its build is ten times faster; its scan depends on
-  cache.** 16 bytes per node against 24, and `push_back` into one `Vec` costs 0.09x to 0.10x of
-  std's one-allocation-per-node build. At 2^14 and 2^16, where both lists fit in L2, link decoding
-  makes the scan 1.4x to 1.6x slower. At 2^18 the contiguous 4 MiB array beats pointer chasing
-  (0.55x), but at 2^20 it is 1.14x std's time (IQR 1.04-1.20); the memory saving remains.
-* **Width matters less than expected.** A 16-bit B+tree saves 0.3 bytes per entry and a 16-bit list
-  saves nothing (`u64` plus two `u16` links pads to the same 16 bytes as two `u32` links); the
-  16-bit hash map saves 4 bytes per entry but cannot hold more than 65,535 entries. The 16-bit
-  B+tree is 0.98x to 1.03x the `u32` time, the 16-bit hash map 0.96x to 1.30x, and the 16-bit
-  list 1.13x to 1.14x, so the width is not a reliable time lever after it fits.
+  array: 0.34x to 0.45x of std's time with the same hasher, and about 0.27x against std's default
+  SipHash. Lookup with the same hasher is 0.80x to 1.22x, so the container's routing is slower
+  than hashbrown's at 2^18 and 2^20; the 0.48x to 0.72x win against std's default map is mostly
+  FNV against SipHash. Churn is 0.73x to 1.47x.
+* **The linked list's dense arena becomes a fast path when its storage order is list order.**
+  `push_back`-built lists set an `is_contiguous` flag, and `iter`/`into_iter` then walk the node
+  slice instead of decoding links. Scan time is 0.34x std at 2^14, 0.26x at 2^16, 0.13x at 2^18
+  and 0.63x at 2^20; without the fast path the same build scanned at 1.4x to 1.6x std in cache.
+  A node still takes 16 bytes against 24, and the build is 8x to 10x faster.
+* **The missing bulk APIs were worth more than micro-tuning the hot loops.** `BTreeMap::range`
+  seeks to its start: a 10,485-entry range takes 29.3 µs/query against 79.3 µs for
+  `std::BTreeMap` and 316.6 µs for `iter().skip()` (2.80, 7.56 and 30.19 ns per entry).
+  `for_each_mut` updates a million values in 2.4 ns/entry against 103 ns for one `get_mut` per
+  key; the same probe is 1.72 against 10.1 ns for the hash map. `shrink_to_fit` compacts a
+  read-mostly B+tree from 18.2 to 12.7 bytes per entry (the hash map compacts live slots too).
+  `HashMap::retain` is 3.19 ns/entry against 7.86 for per-key removal when keeping 1%, but slower
+  (7.16 against 5.77) when removing half, because it rebuilds every chain. These are API
+  additions, not benchmark variants; the matrix above still measures the default containers.
+* **Width matters less than expected, but large nodes change its reach.** A 16-bit B+tree uses
+  18.3 bytes per entry against 18.4 for `u32` and runs within a few percent on time, while
+  addressing about 5.7 million entries because links address nodes, not entries. The 16-bit hash
+  map saves 4 bytes per entry but caps at 65,535 entries; the 16-bit list saves nothing (`u64`
+  plus two `u16` links pads to the same 16 bytes as two `u32` links).
 
 ## Benchmarks
 
@@ -235,7 +245,7 @@ target/release/sweep --workloads btree-lookup,btree-scan,btree-churn,hash-lookup
     --sizes 10,12,14,16,18,20 --out my-containers.jsonl --md my-containers.md
 ```
 
-`bench/results.md` is the first recorded sweep (the nine original workloads, 405 cells: the trees, the expression tree, the graphs and the blobs), and `bench/environment.txt` says how it was taken. `bench/decisive/` records the node graphs and B-trees (364 cells), which were measured in repeated sweeps and judged on ratios (`bench/decisive/environment.txt`). `bench/containers/` records the seven dynamic-container workloads (144 cells, 129 done and 15 skipped for width), with 14 complete sweeps, a merged results file, every replicate and a ratios table (`bench/containers/environment.txt`). All 22 workloads are registered, so a plain `sweep` runs 913 cells; without `--out` and `--md` it appends them to the first record's `bench/results.jsonl` and rewrites `bench/results.md`, whose report keeps the last measurement of every cell. Pass `--out` and `--md` for your own runs, and `--workloads` to pick a record's workloads.
+`bench/results.md` is the first recorded sweep (the nine original workloads, 405 cells: the trees, the expression tree, the graphs and the blobs), and `bench/environment.txt` says how it was taken. `bench/decisive/` records the node graphs and B-trees (364 cells), which were measured in repeated sweeps and judged on ratios (`bench/decisive/environment.txt`). `bench/containers/` records the seven dynamic-container workloads (144 cells, 132 done and 12 skipped for width), with 14 complete sweeps, a merged results file, every replicate and a ratios table (`bench/containers/environment.txt`). All 22 workloads are registered, so a plain `sweep` runs 913 cells; without `--out` and `--md` it appends them to the first record's `bench/results.jsonl` and rewrites `bench/results.md`, whose report keeps the last measurement of every cell. Pass `--out` and `--md` for your own runs, and `--workloads` to pick a record's workloads.
 
 Each cell runs in its own process pinned to one CPU with `taskset`, so peak RSS is clean. Leave
 the machine idle while a sweep runs, and check that it is first: `uptime` should show a load
