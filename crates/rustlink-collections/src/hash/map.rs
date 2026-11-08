@@ -60,6 +60,19 @@ impl<K, V, W: Width> HashMap<K, V, W> {
     }
 }
 
+#[cfg(feature = "std")]
+impl<K, V, W: Width> HashMap<K, V, W, std::collections::hash_map::RandomState> {
+    /// An empty map with the standard library's random hasher (collision-resistant).
+    pub fn new_random() -> Self {
+        Self::with_hasher(std::collections::hash_map::RandomState::new())
+    }
+
+    /// An empty map with room for `capacity` entries and the random hasher.
+    pub fn with_capacity_random(capacity: usize) -> Self {
+        Self::with_capacity_and_hasher(capacity, std::collections::hash_map::RandomState::new())
+    }
+}
+
 impl<K, V, W: Width, S> HashMap<K, V, W, S> {
     /// An empty map using `hasher`.
     pub fn with_hasher(hasher: S) -> Self {

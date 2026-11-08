@@ -1,0 +1,6 @@
+name = "rustlink"
+version = "0.1.0"
+defaultTargets = ["Rustlink"]
+
+[[lean_lib]]
+name = "Rustlink"

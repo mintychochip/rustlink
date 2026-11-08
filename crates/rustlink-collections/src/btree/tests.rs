@@ -508,3 +508,36 @@ fn a_production_capacity_tree_survives_deep_splits_and_merges() {
     assert!(removed >= 20_000, "removed {removed}");
     assert_matches(&map, &model);
 }
+
+#[test]
+fn a_u16_tree_fills_to_full_on_shuffled_keys() {
+    // The "~5.7M" figure in the module docs assumes shuffled (random-order)
+    // inserts. This test measures the fill by inserting shuffled keys with
+    // `try_insert` until the map returns `Full`.
+    let mut keys: Vec<u32> = (0..8_400_000u32).collect();
+    let mut rng = Lcg(0xD1FF);
+    for i in (1..keys.len()).rev() {
+        let j = (rng.next() as usize) % (i + 1);
+        keys.swap(i, j);
+    }
+    let mut map: BTreeMap<u32, u32, u16> = BTreeMap::new();
+    let mut accepted = 0u32;
+    for &key in &keys {
+        match map.try_insert(key, key) {
+            Ok(_) => accepted += 1,
+            Err(Full((k, v))) => {
+                assert_eq!((k, v), (key, key));
+                break;
+            }
+        }
+    }
+    println!("measured u16 shuffled fill: {}", map.len());
+    assert_eq!(map.len(), accepted as usize);
+    assert!(5_000_000 < map.len(), "fill {} below 5M", map.len());
+    assert!(
+        map.len() < 128 * 65_535,
+        "fill {} exceeds upper bound",
+        map.len()
+    );
+    check(&map);
+}

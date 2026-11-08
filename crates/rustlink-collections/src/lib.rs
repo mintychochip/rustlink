@@ -47,6 +47,8 @@
 #![warn(missing_docs)]
 
 extern crate alloc;
+#[cfg(feature = "std")]
+extern crate std;
 
 mod btree;
 mod error;

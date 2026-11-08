@@ -910,3 +910,22 @@ mod preallocated_tests {
         assert!(list.is_contiguous());
     }
 }
+
+#[cfg(test)]
+mod padding_tests {
+    use super::*;
+
+    #[test]
+    fn node_bytes_matches_packed_size_when_payload_align_is_one() {
+        // Exact `size_of` values (measured): the packed formula holds only for
+        // align-1 scalars; `u64` with `u8` links pads (packed 10, actual 16).
+        assert_eq!(LinkedList::<u8, u32>::node_bytes(), 9);
+        assert_eq!(LinkedList::<u32, u16>::node_bytes(), 8);
+        assert_eq!(LinkedList::<u64, u8>::node_bytes(), 16);
+        assert_eq!(
+            core::mem::size_of::<u64>() + 2 * core::mem::size_of::<OptAbs<(), u8>>(),
+            10
+        );
+        assert!(LinkedList::<u64, u8>::node_bytes() > 10, "padding expected");
+    }
+}

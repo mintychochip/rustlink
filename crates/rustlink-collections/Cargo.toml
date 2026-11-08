@@ -8,7 +8,7 @@ publish.workspace = true
 
 [features]
 default = ["std"]
-# Adds `HashMap::new` and friends with the standard library's `RandomState`.
+# Adds `HashMap::new_random` and friends with the standard library's `RandomState`.
 std = []
 
 [dependencies]

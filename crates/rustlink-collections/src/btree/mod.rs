@@ -2,8 +2,11 @@
 //!
 //! Leaves hold the entries and are chained in key order; inner nodes hold separator keys and
 //! child links. Every node lives in one `Vec` and children are addressed with `W`-wide
-//! [`OptAbs`] links, so `W` bounds the number of *nodes*, not entries: with 128-entry leaves a
-//! `u16` tree addresses about 5.7 million entries at this fill. A removed node's slot is reused.
+//! [`OptAbs`] links, so `W` bounds the number of *nodes*, not entries. The upper bound is
+//! `128 * MAX` entries, unreachable because inner nodes share the same `MAX` budget
+//! (`leaves <= MAX - innerNodes`) and leaves split at `MIN_LEAF` (half-full); `128 * MAX`
+//! for `u16` is 8,388,480. The measured fill on shuffled insert is 5,771,498 entries.
+//! A removed node's slot is reused.
 //!
 //! Unlike `std::collections::BTreeMap`, keys and values are moved with `Vec::remove`, so `K` need
 //! not be `Default`; keys are cloned into inner-node separators, so `K: Clone`.

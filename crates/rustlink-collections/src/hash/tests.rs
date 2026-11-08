@@ -328,3 +328,27 @@ fn a_preallocated_u16_map_panics_at_the_width_limit() {
         map.insert(key, u64::from(key));
     }
 }
+
+#[test]
+#[cfg(feature = "std")]
+fn new_random_uses_the_random_hasher() {
+    let mut map: HashMap<u32, &str, u16, RandomState> = HashMap::new_random();
+    assert_eq!(map.insert(2, "two"), None);
+    assert_eq!(map.insert(1, "one"), None);
+    assert_eq!(map.get(&2), Some(&"two"));
+    assert_eq!(map.remove(&1), Some("one"));
+    let mut capped: HashMap<u32, &str, u16, RandomState> = HashMap::with_capacity_random(100);
+    assert_eq!(capped.insert(3, "three"), None);
+    assert_eq!(capped.get(&3), Some(&"three"));
+}
+
+#[test]
+#[cfg(feature = "std")]
+fn set_new_random_uses_the_random_hasher() {
+    let mut set: HashSet<u32, u16, RandomState> = HashSet::new_random();
+    assert!(set.insert(2));
+    assert!(set.contains(&2));
+    assert!(set.remove(&2));
+    let capped: HashSet<u32, u16, RandomState> = HashSet::with_capacity_random(100);
+    assert!(capped.is_empty());
+}

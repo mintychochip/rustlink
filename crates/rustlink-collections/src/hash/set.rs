@@ -46,6 +46,26 @@ impl<T, W: Width> HashSet<T, W> {
     }
 }
 
+#[cfg(feature = "std")]
+impl<T, W: Width> HashSet<T, W, std::collections::hash_map::RandomState> {
+    /// An empty set with the standard library's random hasher (collision-resistant).
+    pub fn new_random() -> Self {
+        HashSet {
+            map: map::HashMap::with_hasher(std::collections::hash_map::RandomState::new()),
+        }
+    }
+
+    /// An empty set with room for `capacity` keys and the random hasher.
+    pub fn with_capacity_random(capacity: usize) -> Self {
+        HashSet {
+            map: map::HashMap::with_capacity_and_hasher(
+                capacity,
+                std::collections::hash_map::RandomState::new(),
+            ),
+        }
+    }
+}
+
 impl<T, W: Width, S> HashSet<T, W, S> {
     /// An empty set using `hasher`.
     pub fn with_hasher(hasher: S) -> Self {
